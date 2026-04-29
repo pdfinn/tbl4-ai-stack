@@ -1,0 +1,89 @@
+# tbl4-stack — unified classroom stack.
+#
+# One compose file, three deployment profiles:
+#   default (no profile flag) — local: Ollama runs on the host
+#   --profile cloud           — Ollama runs as a container alongside the rest
+#   --profile mcp             — adds the mcpo MCP→OpenAPI proxy
+# Profiles compose; e.g. --profile cloud --profile mcp.
+#
+# Container_name is intentionally omitted everywhere so this stack can run
+# alongside tbl4-local-llm and tbl4-n8n on the same host (compose namespaces
+# objects by project name).
+
+services:
+  # ─── OpenWebUI ─────────────────────────────────────────────────────────────
+  open-webui:
+    # See https://github.com/open-webui/open-webui/releases/latest before bumping.
+    image: ghcr.io/open-webui/open-webui:v0.9.1
+    ports:
+      - "${WEBUI_PORT:-3000}:8080"
+    volumes:
+      - open-webui_data:/app/backend/data
+    environment:
+      # Local profile: host Ollama. Cloud profile overrides this to ollama:11434.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - WEBUI_AUTH=false
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # ─── n8n-init ──────────────────────────────────────────────────────────────
+  # One-shot seeder: imports the Ollama credential and starter workflows on a
+  # fresh volume, then exits. Idempotent via a sentinel file. n8n waits for
+  # this to finish.
+  n8n-init:
+    image: docker.n8n.io/n8nio/n8n:2.18.2
+    user: "node"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-init/credentials.json:/tmp/credentials.json:ro
+      - ./templates/summarise-url.workflow.json:/tmp/workflows/summarise-url.workflow.json:ro
+    environment:
+      - N8N_ENCRYPTION_KEY=tbl4-classroom-key-2026
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /home/node/.n8n/.tbl4-seeded ]; then
+          echo "already seeded; skipping"
+          exit 0
+        fi
+        echo "seeding Ollama credential..."
+        n8n import:credentials --input=/tmp/credentials.json
+        echo "importing starter workflows..."
+        n8n import:workflow --separate --input=/tmp/workflows/
+        # Workflows land as drafts. The stack-init service activates them
+        # via the n8n REST API once n8n is up — this gives clean webhook
+        # URLs (no workflow-ID prefix) and a fully zero-click first run.
+        touch /home/node/.n8n/.tbl4-seeded
+        echo "done"
+    restart: "no"
+
+  # ─── n8n ───────────────────────────────────────────────────────────────────
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.18.2
+    depends_on:
+      n8n-init:
+        condition: service_completed_successfully
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Host-shared notes folder for exercises that write Markdown back out.
+      - ./notes:/data/notes
+    environment:
+      - N8N_ENCRYPTION_KEY=tbl4-classroom-key-2026
+      - GENERIC_TIMEZONE=America/New_York
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false
+      - N8N_TEMPLATES_ENABLED=true
+      - N8N_SECURE_COOKIE=false
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  open-webui_data:
+  n8n_data:

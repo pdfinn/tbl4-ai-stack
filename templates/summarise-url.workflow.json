@@ -1,0 +1,78 @@
+{
+  "id": "summariseUrl",
+  "name": "Summarise URL (classroom starter)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "summarise-url",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch and prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 400],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body || {};\nconst rawUrl = (body.url || '').trim();\nif (!rawUrl) {\n  throw new Error('Missing `url` in request body.');\n}\nconst url = rawUrl.match(/^https?:\\/\\//i) ? rawUrl : 'https://' + rawUrl;\nconst focus = (body.focus || '').toString();\n\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url,\n  followRedirect: true,\n  returnFullResponse: false,\n  ignoreHttpStatusErrors: true,\n  headers: { 'User-Agent': 'Mozilla/5.0 (tbl4-classroom)' }\n});\n\nconst raw = typeof response === 'string' ? response : JSON.stringify(response);\nconst stripped = raw\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\nconst content = stripped.slice(0, 6000);\n\nreturn [{ json: { url, focus, content } }];"
+      }
+    },
+    {
+      "id": "chain",
+      "name": "Summarise",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [720, 400],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Summarise the following web page in 5 short factual bullet points. Use only the content provided below — do not invent facts. If the content is empty or does not make sense, say so plainly.\n\n{{ $json.focus ? ('Focus especially on: ' + $json.focus + '.\\n\\n') : '' }}URL: {{ $json.url }}\n\n--- PAGE CONTENT START ---\n{{ $json.content }}\n--- PAGE CONTENT END ---"
+      }
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [720, 600],
+      "parameters": { "model": "llama3.1:latest" },
+      "credentials": {
+        "ollamaApi": { "id": "tbl4OllamaLocal", "name": "Ollama (local)" }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [980, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ ({ summary: $json.text }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch and prepare", "type": "main", "index": 0 }]]
+    },
+    "Fetch and prepare": {
+      "main": [[{ "node": "Summarise", "type": "main", "index": 0 }]]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [[{ "node": "Summarise", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Summarise": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
