@@ -43,7 +43,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
       "typeVersion": 1,
       "position": [720, 600],
-      "parameters": { "model": "llama3.1:latest" },
+      "parameters": { "model": "mistral:latest" },
       "credentials": {
         "ollamaApi": { "id": "tbl4OllamaLocal", "name": "Ollama (local)" }
       }
