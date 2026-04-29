@@ -72,10 +72,10 @@ Edit the `MODEL` line in `.env`, then re-run setup. Browse models at [ollama.com
 
 | Model | Size | Notes |
 |-------|------|-------|
-| `mistral` | 7B | Default. Apache 2.0, supports tool calling. |
-| `llama3.1:8b` | 8B | Alternative, also reliable for tools. |
-| `llama3.2` | 3B | Fast but tool calling is unreliable. |
-| `gpt-oss:20b` | 20B | Larger, better tool calling on capable machines. |
+| `ministral-3:3b` | 3B | Default. Apache 2.0, native tool calling. Fits 8GB RAM. |
+| `mistral` | 7B | Larger Mistral sibling. More headroom for nuance, needs 16GB to be comfortable. |
+| `llama3.1:8b` | 8B | Alternative 8B with reliable tool calling. |
+| `gpt-oss:20b` | 20B | Better tool calling on capable machines (32GB+). |
 
 ## Stop and restart
 
@@ -127,6 +127,7 @@ The pre-seeded `MCP Tools` workflow is the eventual zero-click path; the Python 
 | First launch shows a blank OpenWebUI page | Wait ~60s — it downloads HuggingFace assets on first start |
 | Want a clean slate | Run the teardown script and answer "y" to volume removal, then re-run setup |
 | macOS: setup file blocked by Gatekeeper | Right-click `setup_macos.command` → **Open** → **Open** (one-time approval) |
+| Running on a MacBook Neo (8GB RAM, A18 Pro) | The default `ministral-3:3b` fits. Avoid `mistral` / `llama3.1:8b` — they swap heavily. Stick to the local profile (containerised Ollama on Neo loses Metal acceleration). |
 
 ## License
 
