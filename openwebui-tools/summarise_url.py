@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class Tools:
     class Valves(BaseModel):
         webhook_url: str = Field(
-            # tbl4-stack runs n8n in the same compose network, so OpenWebUI
+            # tbl4-ai-stack runs n8n in the same compose network, so OpenWebUI
             # reaches it at the service name. Override only if the n8n service
             # is renamed or you point this stack at a remote n8n.
             default="http://n8n:5678/webhook/summariseUrl/webhook/summarise-url",

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── tbl4-stack teardown (macOS) ────────────────────────────────────────────
+# ─── tbl4-ai-stack teardown (macOS) ────────────────────────────────────────────
 # Stops the stack and (optionally) deletes its volumes and host Ollama.
 # Asks for confirmation before each destructive step.
 
@@ -33,7 +33,7 @@ docker compose --profile cloud --profile mcp down
 info "Containers stopped"
 
 echo
-if confirm "Delete tbl4-stack volumes (chat history, n8n workflows, OpenWebUI tools)?"; then
+if confirm "Delete tbl4-ai-stack volumes (chat history, n8n workflows, OpenWebUI tools)?"; then
     docker compose --profile cloud --profile mcp down -v
     info "Volumes deleted"
 fi

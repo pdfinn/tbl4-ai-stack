@@ -1,4 +1,4 @@
-# tbl4-stack — unified classroom stack.
+# tbl4-ai-stack — unified classroom stack.
 #
 # One compose file, three deployment profiles:
 #   default (no profile flag) — local: Ollama runs on the host

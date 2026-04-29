@@ -2,7 +2,7 @@
   <img src="logo.png" alt="Tarkas Brainlab IV" width="200">
 </p>
 
-<h1 align="center">Tarkas Brainlab IV — Stack</h1>
+<h1 align="center">Tarkas Brainlab IV — AI Stack</h1>
 
 <p align="center">
   Unified classroom stack: local LLM, OpenWebUI, n8n, and tools — one <code>docker compose up</code>.<br>
@@ -31,7 +31,7 @@ This repo is the everything-in-one path. The two single-purpose stacks remain av
 - [`tbl4-local-llm`](https://github.com/pdfinn/tbl4-local-llm) — just OpenWebUI + Ollama, no n8n
 - [`tbl4-n8n`](https://github.com/pdfinn/tbl4-n8n) — just n8n with classroom workflows
 
-`tbl4-stack` brings them together behind a single compose file, automates first-run bootstrapping, and adds a cloud-deployable profile.
+`tbl4-ai-stack` brings them together behind a single compose file, automates first-run bootstrapping, and adds a cloud-deployable profile.
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ The setup script handles everything else, including installing Ollama on local-p
 
 ## Setup
 
-1. [Download as a ZIP](https://github.com/pdfinn/tbl4-stack/archive/refs/heads/main.zip) and unzip it.
+1. [Download as a ZIP](https://github.com/pdfinn/tbl4-ai-stack/archive/refs/heads/main.zip) and unzip it.
 2. Double-click the file for your operating system:
    - **macOS:** `setup_macos.command`
    - **Windows:** `setup_windows.bat`
@@ -135,7 +135,7 @@ Copyright (c) 2026 Tarkas Brainlab IV (TBL4).
 
 Licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE). You may use, modify, and redistribute this software for any noncommercial purpose, including personal study, research, teaching, and use by educational or other noncommercial organizations. Commercial use requires a separate license from the copyright holder.
 
-For commercial licensing inquiries, please [open an issue on this repository](https://github.com/pdfinn/tbl4-stack/issues/new).
+For commercial licensing inquiries, please [open an issue on this repository](https://github.com/pdfinn/tbl4-ai-stack/issues/new).
 
 ---
 

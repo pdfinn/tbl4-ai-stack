@@ -1,4 +1,4 @@
-# ─── tbl4-stack Teardown (Windows) ──────────────────────────────────────────
+# ─── tbl4-ai-stack Teardown (Windows) ──────────────────────────────────────────
 # Stops the stack and (optionally) deletes its volumes and host Ollama.
 # Asks for confirmation before each destructive step.
 #
@@ -29,11 +29,11 @@ Write-Host "Stopping containers..."
 Info "Containers stopped"
 
 # ─── Step 2: Delete volumes ──────────────────────────────────────────────────
-if (Confirm-Step "Delete tbl4-stack volumes (chat history, n8n workflows, OpenWebUI tools)?") {
+if (Confirm-Step "Delete tbl4-ai-stack volumes (chat history, n8n workflows, OpenWebUI tools)?") {
     & docker compose --profile cloud --profile mcp down -v
     Info "Volumes deleted"
 } else {
-    Skip "tbl4-stack volumes"
+    Skip "tbl4-ai-stack volumes"
 }
 
 # ─── Step 3: Uninstall Ollama (host) ─────────────────────────────────────────

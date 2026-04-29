@@ -1,4 +1,4 @@
-# ─── tbl4-stack Setup (Windows) ─────────────────────────────────────────────
+# ─── tbl4-ai-stack Setup (Windows) ─────────────────────────────────────────────
 # Brings up the unified classroom stack: OpenWebUI + n8n + auto-bootstrapper
 # and (optionally) containerised Ollama and the mcpo MCP proxy.
 #

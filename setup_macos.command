@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── tbl4-stack setup (macOS) ───────────────────────────────────────────────
+# ─── tbl4-ai-stack setup (macOS) ───────────────────────────────────────────────
 # Brings up the unified classroom stack: OpenWebUI + n8n + auto-bootstrapper
 # and (optionally) containerised Ollama and the mcpo MCP proxy.
 #
