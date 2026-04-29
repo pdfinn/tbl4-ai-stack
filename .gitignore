@@ -1,0 +1,6 @@
+.env
+.claude/
+ollama_data/
+open-webui_data/
+n8n_data/
+notes/
