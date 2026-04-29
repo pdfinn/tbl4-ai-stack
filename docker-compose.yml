@@ -22,7 +22,12 @@ services:
     environment:
       # Local profile: host Ollama. Cloud profile overrides this to ollama:11434.
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - WEBUI_AUTH=false
+      # Auth is on so the login form works in fresh browser sessions.
+      # WEBUI_AUTH=false drops users into a no-auth single-user mode, but
+      # OpenWebUI refuses to honor that flag once any user exists in the
+      # DB (which our stack-init seeding always produces) and the UI ends
+      # up wedged. The seeded admin (tbl4@example.com) handles login.
+      - WEBUI_AUTH=true
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
