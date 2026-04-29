@@ -29,18 +29,21 @@ services:
     restart: unless-stopped
 
   # ─── n8n-init ──────────────────────────────────────────────────────────────
-  # One-shot seeder: imports the Ollama credential and starter workflows on a
-  # fresh volume, then exits. Idempotent via a sentinel file. n8n waits for
-  # this to finish.
+  # One-shot seeder: substitutes the Ollama URL into the credential template,
+  # imports it along with the starter workflows on a fresh volume, then exits.
+  # Idempotent via a sentinel file. n8n waits for this to finish.
   n8n-init:
     image: docker.n8n.io/n8nio/n8n:2.18.2
     user: "node"
     volumes:
       - n8n_data:/home/node/.n8n
-      - ./n8n-init/credentials.json:/tmp/credentials.json:ro
+      - ./n8n-init/credentials.tmpl.json:/tmp/credentials.tmpl.json:ro
       - ./templates/summarise-url.workflow.json:/tmp/workflows/summarise-url.workflow.json:ro
     environment:
       - N8N_ENCRYPTION_KEY=tbl4-classroom-key-2026
+      # Substituted into the credential at seed time. Default targets host
+      # Ollama (local profile); cloud profile overrides this to ollama:11434.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -49,7 +52,8 @@ services:
           echo "already seeded; skipping"
           exit 0
         fi
-        echo "seeding Ollama credential..."
+        echo "seeding Ollama credential (baseUrl=$$OLLAMA_BASE_URL)..."
+        sed "s|__OLLAMA_BASE_URL__|$$OLLAMA_BASE_URL|g" /tmp/credentials.tmpl.json > /tmp/credentials.json
         n8n import:credentials --input=/tmp/credentials.json
         echo "importing starter workflows..."
         n8n import:workflow --separate --input=/tmp/workflows/
@@ -110,7 +114,46 @@ services:
     entrypoint: ["python", "/app/init.py"]
     restart: "no"
 
+  # ─── Ollama (cloud profile) ────────────────────────────────────────────────
+  # Containerised Ollama for cloud / GPU-less / shared deployments. Locally
+  # we prefer host-installed Ollama for native GPU/Metal acceleration; this
+  # service only spins up when --profile cloud is passed.
+  ollama:
+    profiles: ["cloud"]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+  # ─── ollama-init (cloud profile) ───────────────────────────────────────────
+  # One-shot: pulls the configured model into the ollama service so the chain
+  # has something to talk to. Pure curl — avoids re-using the ollama image's
+  # entrypoint (which would try to start a second server).
+  ollama-init:
+    profiles: ["cloud"]
+    image: curlimages/curl:8.10.1
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      - MODEL=${MODEL:-mistral}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "waiting for ollama..."
+        until curl -sf http://ollama:11434/api/tags >/dev/null; do sleep 2; done
+        echo "pulling $$MODEL..."
+        curl -sf -X POST http://ollama:11434/api/pull \
+          -H "Content-Type: application/json" \
+          -d "{\"name\": \"$$MODEL\"}" \
+          --no-buffer | tail -c 200
+        echo
+        echo "done"
+    restart: "no"
+
 volumes:
   open-webui_data:
   n8n_data:
   stack_init_data:
+  ollama_data:

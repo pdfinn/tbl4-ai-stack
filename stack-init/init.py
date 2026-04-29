@@ -39,7 +39,7 @@ def request(url, method="GET", data=None, headers=None, cookies=None):
         return e.code, e.read().decode(), dict(e.headers)
 
 
-def wait_for(url, timeout=180):
+def wait_for(url, timeout=600):
     print(f"waiting for {url}", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
