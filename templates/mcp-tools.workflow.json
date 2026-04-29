@@ -1,0 +1,79 @@
+{
+  "id": "mcpTools",
+  "name": "MCP Tools (for OpenWebUI)",
+  "nodes": [
+    {
+      "id": "mcp",
+      "name": "mcp",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "typeVersion": 2,
+      "position": [320, 400],
+      "parameters": {
+        "authentication": "none",
+        "path": "tools"
+      }
+    },
+    {
+      "id": "summariseTool",
+      "name": "summariseUrl",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [640, 600],
+      "parameters": {
+        "toolDescription": "Fetches the given URL and returns a short summary. Use when the user asks you to summarise, explain, or describe the content of a URL.",
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/summariseUrl/webhook/summarise-url",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"url\": \"{url}\",\n  \"focus\": \"{focus}\"\n}",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "url",
+              "description": "The web page to summarise (must include https:// or http://).",
+              "type": "string"
+            },
+            {
+              "name": "focus",
+              "description": "Optional topic the summary should emphasise.",
+              "type": "string"
+            }
+          ]
+        },
+        "optimizeResponse": false
+      }
+    },
+    {
+      "id": "note-what",
+      "name": "What this is",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 60],
+      "parameters": {
+        "width": 900,
+        "height": 260,
+        "color": 7,
+        "content": "## MCP Tools\n\nExposes classroom tools over the Model Context Protocol so OpenWebUI can consume them as a Tool Server of type `mcp` (no mcpo needed — OpenWebUI speaks Streamable HTTP directly).\n\nEach tool below is an **HTTP Request Tool** wired to the MCP trigger. They call the real worker workflows (e.g. `Summarise URL`) via their published webhook URLs.\n\n**Register once in OpenWebUI** → Admin Settings → Tools → Tool Servers → Add:\n\n- **Type:** MCP\n- **URL:** `http://host.docker.internal:5678/webhook/mcpTools/mcp/tools`\n- **Auth:** None\n\n**Publish both this workflow AND the `Summarise URL` workflow** via the UI Publish buttons before testing."
+      }
+    },
+    {
+      "id": "note-add",
+      "name": "How to add a tool",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [240, 800],
+      "parameters": {
+        "width": 900,
+        "height": 200,
+        "color": 4,
+        "content": "## To add a new tool\n\n1. Build the tool's worker workflow (Webhook-triggered → do the work → Respond). Publish it.\n2. Add an **HTTP Request Tool** node in this workflow. Set:\n   - Description (what the tool does, written as instruction for the LLM).\n   - URL pointing at the worker workflow's webhook (use `localhost:5678` — n8n talking to itself).\n   - Request body with `{placeholder}` tokens for each input the LLM should fill.\n3. Connect the new tool to the `mcp` trigger's **Tools** input (the purple `ai_tool` port).\n4. Re-publish this workflow. Refresh the Tool Servers in OpenWebUI. The new tool appears."
+      }
+    }
+  ],
+  "connections": {
+    "summariseUrl": {
+      "ai_tool": [[{ "node": "mcp", "type": "ai_tool", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -39,6 +39,7 @@ services:
       - n8n_data:/home/node/.n8n
       - ./n8n-init/credentials.tmpl.json:/tmp/credentials.tmpl.json:ro
       - ./templates/summarise-url.workflow.json:/tmp/workflows/summarise-url.workflow.json:ro
+      - ./templates/mcp-tools.workflow.json:/tmp/workflows/mcp-tools.workflow.json:ro
     environment:
       - N8N_ENCRYPTION_KEY=tbl4-classroom-key-2026
       # Substituted into the credential at seed time. Default targets host
@@ -113,6 +114,23 @@ services:
       - OWNER_PASSWORD=Tbl4-classroom-2026!
     entrypoint: ["python", "/app/init.py"]
     restart: "no"
+
+  # ─── mcpo (mcp profile) ────────────────────────────────────────────────────
+  # MCP-to-OpenAPI proxy. OpenWebUI's native MCP support is Streamable-HTTP
+  # only; mcpo lets you bring stdio-based MCP servers into OpenWebUI by
+  # exposing them as OpenAPI endpoints. Profile-gated because mcpo refuses
+  # to start with an empty config — add at least one server to mcpo.config.json,
+  # then `docker compose --profile mcp up -d`. Register each tool in OpenWebUI
+  # under Admin Settings → External Tools using URLs like http://mcpo:8000/<name>.
+  mcpo:
+    profiles: ["mcp"]
+    image: ghcr.io/open-webui/mcpo:latest
+    command: ["--config", "/config/mcpo.config.json", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./mcpo.config.json:/config/mcpo.config.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 
   # ─── Ollama (cloud profile) ────────────────────────────────────────────────
   # Containerised Ollama for cloud / GPU-less / shared deployments. Locally
