@@ -146,6 +146,12 @@ services:
     image: ollama/ollama:latest
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      # Memory tuning: flash attention reduces KV-cache footprint and speeds
+      # up inference; q8_0 KV-cache quantisation roughly halves cache RAM at
+      # negligible quality cost. Universally safe defaults.
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KV_CACHE_TYPE=q8_0
     restart: unless-stopped
 
   # ─── ollama-init (cloud profile) ───────────────────────────────────────────
