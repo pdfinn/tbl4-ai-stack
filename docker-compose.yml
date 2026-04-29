@@ -84,6 +84,33 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # ─── stack-init ────────────────────────────────────────────────────────────
+  # One-shot bootstrap: creates the n8n owner, activates the seeded workflows,
+  # creates the OpenWebUI admin, and registers the Summarise URL tool — so the
+  # first `docker compose up -d` lands on a fully working chain with zero
+  # clicks. Idempotent: a sentinel in /state short-circuits re-runs.
+  stack-init:
+    image: python:3.12-alpine
+    depends_on:
+      n8n-init:
+        condition: service_completed_successfully
+      n8n:
+        condition: service_started
+      open-webui:
+        condition: service_started
+    volumes:
+      - ./stack-init/init.py:/app/init.py:ro
+      - ./openwebui-tools:/app/openwebui-tools:ro
+      - stack_init_data:/state
+    environment:
+      - N8N_URL=http://n8n:5678
+      - OWUI_URL=http://open-webui:8080
+      - OWNER_EMAIL=tbl4@example.com
+      - OWNER_PASSWORD=Tbl4-classroom-2026!
+    entrypoint: ["python", "/app/init.py"]
+    restart: "no"
+
 volumes:
   open-webui_data:
   n8n_data:
+  stack_init_data:
