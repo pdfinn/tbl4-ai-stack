@@ -18,8 +18,8 @@ import urllib.request
 
 N8N_URL = os.environ.get("N8N_URL", "http://n8n:5678")
 OWUI_URL = os.environ.get("OWUI_URL", "http://open-webui:8080")
-OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "tbl4@example.com")
-OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "Tbl4-classroom-2026!")
+OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "student@example.com")
+OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "Ai-classroom-2026")
 TOOL_PATH = os.environ.get("TOOL_PATH", "/app/openwebui-tools/summarise_url.py")
 SENTINEL = "/state/.tbl4-ai-stack-init"
 

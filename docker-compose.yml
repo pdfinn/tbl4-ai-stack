@@ -26,7 +26,7 @@ services:
       # WEBUI_AUTH=false drops users into a no-auth single-user mode, but
       # OpenWebUI refuses to honor that flag once any user exists in the
       # DB (which our stack-init seeding always produces) and the UI ends
-      # up wedged. The seeded admin (tbl4@example.com) handles login.
+      # up wedged. The seeded admin (student@example.com) handles login.
       - WEBUI_AUTH=true
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
     extra_hosts:
@@ -115,8 +115,8 @@ services:
     environment:
       - N8N_URL=http://n8n:5678
       - OWUI_URL=http://open-webui:8080
-      - OWNER_EMAIL=tbl4@example.com
-      - OWNER_PASSWORD=Tbl4-classroom-2026!
+      - OWNER_EMAIL=student@example.com
+      - OWNER_PASSWORD=Ai-classroom-2026
     entrypoint: ["python", "/app/init.py"]
     restart: "no"
 

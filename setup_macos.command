@@ -161,8 +161,8 @@ echo "  OpenWebUI:  http://localhost:${WEBUI_PORT}"
 echo "  n8n:        http://localhost:${N8N_PORT}"
 echo
 echo "  Default credentials (n8n + OpenWebUI):"
-echo "    email:    tbl4@example.com"
-echo "    password: Tbl4-classroom-2026!"
+echo "    email:    student@example.com"
+echo "    password: Ai-classroom-2026"
 echo
 echo "  The Summarise URL tool is pre-registered. Open a chat,"
 echo "  toggle the tool on in the composer, and try:"

@@ -52,8 +52,8 @@ The first run takes about a minute on warm hardware (downloading container image
 
 When the script finishes, open **http://localhost:3000**. Log in with the seeded admin account:
 
-- **email:** `tbl4@example.com`
-- **password:** `Tbl4-classroom-2026!`
+- **email:** `student@example.com`
+- **password:** `Ai-classroom-2026`
 
 The Summarise URL tool is in the composer toolbar; toggle it on and chat normally. n8n at **http://localhost:5678** uses the same credentials.
 
