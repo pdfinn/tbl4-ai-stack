@@ -50,7 +50,12 @@ The first run takes about a minute on warm hardware (downloading container image
 
 > **macOS first launch:** Gatekeeper may block the file. Right-click `setup_macos.command` → **Open** → **Open** to approve it once. You may also be asked for your password — that's the Ollama installer adding the `ollama` command.
 
-When the script finishes, open **http://localhost:3000**. The Summarise URL tool is in the composer toolbar; toggle it on and chat normally.
+When the script finishes, open **http://localhost:3000**. Log in with the seeded admin account:
+
+- **email:** `tbl4@example.com`
+- **password:** `Tbl4-classroom-2026!`
+
+The Summarise URL tool is in the composer toolbar; toggle it on and chat normally. n8n at **http://localhost:5678** uses the same credentials.
 
 ## Deployment profiles
 
@@ -112,9 +117,9 @@ The shipping setup includes one tool (`summarise_url`) wired through n8n's `Summ
 1. Build a worker workflow in n8n (Webhook trigger → do work → Respond to Webhook). Publish it.
 2. Either:
    - **Python tool** — write a small Python file in the OpenWebUI Tools editor that POSTs to the webhook (see `openwebui-tools/summarise_url.py` as a template), **or**
-   - **MCP Tools workflow** — add an HTTP Request Tool node to the seeded `MCP Tools` workflow and re-publish; once OpenWebUI's MCP client bug is fixed, the tool appears automatically.
+   - **MCP Tools workflow** — the seeded `MCP Tools` workflow is the *eventual* zero-click path, but auto-discovery via OpenWebUI is currently blocked by upstream bugs in both possible routes (OpenWebUI's MCP client and n8n's tool input schema). See [`TODO.md`](TODO.md) for the diagnosis and re-test conditions.
 
-The pre-seeded `MCP Tools` workflow is the eventual zero-click path; the Python tool is the path that works today.
+The Python tool is the path that works today; the MCP path will light up once one of the two upstream fixes lands.
 
 ## Troubleshooting
 
