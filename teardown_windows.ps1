@@ -29,11 +29,16 @@ Write-Host "Stopping containers..."
 Info "Containers stopped"
 
 # ─── Step 2: Delete volumes ──────────────────────────────────────────────────
-if (Confirm-Step "Delete tbl4-ai-stack volumes (chat history, n8n workflows, OpenWebUI tools)?") {
+if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history, workflows, tools, custom settings)?") {
     & docker compose --profile cloud --profile mcp down -v
     Info "Volumes deleted"
+    # Drop .env too: setup only writes it on first run, so a stale .env
+    # from a prior testing session silently survives teardown and pins
+    # the next setup to non-default ports / secrets.
+    Remove-Item -Path .env -Force -ErrorAction SilentlyContinue
+    Info ".env removed"
 } else {
-    Skip "tbl4-ai-stack volumes"
+    Skip "tbl4-ai-stack state"
 }
 
 # ─── Step 3: Uninstall Ollama (host) ─────────────────────────────────────────

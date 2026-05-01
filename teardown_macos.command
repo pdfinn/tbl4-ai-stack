@@ -33,9 +33,14 @@ docker compose --profile cloud --profile mcp down
 info "Containers stopped"
 
 echo
-if confirm "Delete tbl4-ai-stack volumes (chat history, n8n workflows, OpenWebUI tools)?"; then
+if confirm "Delete tbl4-ai-stack state (volumes + local .env: chat history, workflows, tools, custom settings)?"; then
     docker compose --profile cloud --profile mcp down -v
     info "Volumes deleted"
+    # Drop .env too: setup only writes it on first run, so a stale .env
+    # from a prior testing session silently survives teardown and pins
+    # the next setup to non-default ports / secrets.
+    rm -f .env
+    info ".env removed"
 fi
 
 echo
