@@ -74,7 +74,7 @@ def setup_n8n():
     code, body, headers = request(f"{N8N_URL}/rest/owner/setup", "POST", {
         "email": OWNER_EMAIL,
         "password": OWNER_PASSWORD,
-        "firstName": "TBL4",
+        "firstName": "Classroom",
         "lastName": "Student",
     })
     if code == 200:
@@ -129,7 +129,7 @@ def setup_owui():
         print("  owui: already onboarded — skipping admin signup", flush=True)
         return
     code, body, _ = request(f"{OWUI_URL}/api/v1/auths/signup", "POST", {
-        "name": "TBL4",
+        "name": "Student",
         "email": OWNER_EMAIL,
         "password": OWNER_PASSWORD,
     })
