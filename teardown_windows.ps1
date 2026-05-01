@@ -41,15 +41,17 @@ if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history
     Skip "tbl4-ai-stack state"
 }
 
-# ─── Step 3: Uninstall Ollama (host) ─────────────────────────────────────────
-$ollamaInstalled = $false
-try { $null = Get-Command ollama -ErrorAction Stop; $ollamaInstalled = $true } catch {}
-
-if ($ollamaInstalled) {
-    if (Confirm-Step "Uninstall Ollama from your system?") {
+# ─── Step 3: Uninstall Ollama (host, only if setup installed it) ─────────────
+# Only offer to uninstall Ollama if *this* repo's setup installed it.
+# Setup drops .tbl4-installed-ollama; if the marker is absent the user had
+# Ollama from elsewhere (winget/manual install before running setup) and we
+# keep our hands off it.
+if (Test-Path .tbl4-installed-ollama) {
+    if (Confirm-Step "Uninstall the Ollama that setup installed (and remove its models)?") {
         try { Stop-Process -Name "ollama*" -Force -ErrorAction SilentlyContinue } catch {}
         try {
             winget uninstall --id Ollama.Ollama --accept-source-agreements
+            Remove-Item -Path .tbl4-installed-ollama -Force -ErrorAction SilentlyContinue
             Info "Ollama uninstalled"
         } catch {
             Warn "Could not auto-uninstall Ollama. Remove it from Settings > Apps > Installed apps."

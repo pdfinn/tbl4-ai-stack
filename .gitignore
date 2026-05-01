@@ -1,5 +1,6 @@
 .env
 .claude/
+.tbl4-installed-ollama
 ollama_data/
 open-webui_data/
 n8n_data/

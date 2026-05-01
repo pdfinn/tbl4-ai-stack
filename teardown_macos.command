@@ -44,11 +44,19 @@ if confirm "Delete tbl4-ai-stack state (volumes + local .env: chat history, work
 fi
 
 echo
-if command -v ollama &>/dev/null; then
-    if confirm "Uninstall host Ollama and remove its models?"; then
+# Only offer to uninstall Ollama if *this* repo's setup installed it.
+# Setup drops .tbl4-installed-ollama containing the install path; if the
+# marker is absent the user had Ollama from elsewhere (Homebrew, prior
+# install, …) and we keep our hands off it.
+if [ -f .tbl4-installed-ollama ]; then
+    if confirm "Uninstall the Ollama that setup installed (and remove its models)?"; then
         warn "Stop the Ollama menu-bar app first if it's running."
-        sudo rm -f /usr/local/bin/ollama || true
+        ollama_bin=$(cat .tbl4-installed-ollama 2>/dev/null || true)
+        if [ -n "$ollama_bin" ] && [ -e "$ollama_bin" ]; then
+            sudo rm -f "$ollama_bin" || true
+        fi
         rm -rf "${HOME}/.ollama" || true
+        rm -f .tbl4-installed-ollama
         info "Ollama removed"
     fi
 fi

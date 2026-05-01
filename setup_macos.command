@@ -100,6 +100,11 @@ if [ "$USE_LOCAL" = "1" ] && [ "$USE_CLOUD" = "0" ]; then
         warn "Installing Ollama..."
         curl -fsSL https://ollama.com/install.sh | sh
         echo
+        # Record that *this script* installed Ollama, and the path it landed
+        # at, so teardown can offer to uninstall it. Without this marker,
+        # teardown will not touch a host Ollama (e.g. one the user installed
+        # via Homebrew before ever running setup).
+        command -v ollama > .tbl4-installed-ollama 2>/dev/null || true
     fi
     info "Ollama is installed"
 

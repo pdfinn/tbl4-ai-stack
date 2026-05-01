@@ -104,6 +104,9 @@ if ($useLocal -and -not $useCloud) {
             Fail "Could not install Ollama. Install manually from:`nhttps://ollama.com/download/windows"
         }
         $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        # Marker so teardown knows *this script* installed Ollama. Without it,
+        # teardown will not touch a host Ollama the user installed separately.
+        Set-Content -Path .tbl4-installed-ollama -Value "Ollama.Ollama"
         Write-Host ""
     }
     Info "Ollama is installed"
