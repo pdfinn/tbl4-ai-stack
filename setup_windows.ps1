@@ -148,7 +148,42 @@ if ($useLocal -and -not $useCloud) {
     Write-Host ""
     # Suppress OLLAMA_HOST so the CLI talks to localhost, not the in-container URL.
     $prev = $env:OLLAMA_HOST; $env:OLLAMA_HOST = $null
-    try { & ollama pull $Model } finally { $env:OLLAMA_HOST = $prev }
+    try {
+        & ollama pull $Model
+
+        # Some Mistral library templates (e.g. ministral-3:3b) call template
+        # helpers — currentDate, yesterdayDate — that older Ollama builds
+        # don't define, breaking every chat. If the local Ollama can't
+        # render the template, rebuild the model under the same tag with
+        # those references substituted out.
+        & ollama show --template $Model 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Warn "Model template uses helpers missing from this Ollama; patching..."
+            $parts = $Model.Split(':', 2)
+            $modelName = $parts[0]
+            $modelTag = if ($parts.Length -eq 2) { $parts[1] } else { "latest" }
+            $manifestPath = Join-Path $env:USERPROFILE ".ollama/models/manifests/registry.ollama.ai/library/$modelName/$modelTag"
+            if (-not (Test-Path $manifestPath)) {
+                Fail "Cannot locate Ollama manifest at $manifestPath. Upgrade Ollama (https://ollama.com/download) and re-run."
+            }
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            $tmplLayer = $manifest.layers | Where-Object { $_.mediaType -eq "application/vnd.ollama.image.template" } | Select-Object -First 1
+            if (-not $tmplLayer) { Fail "Could not find template layer in manifest." }
+            $tmplDigest = $tmplLayer.digest.Split(':', 2)[1]
+            $blobPath = Join-Path $env:USERPROFILE ".ollama/models/blobs/sha256-$tmplDigest"
+            if (-not (Test-Path $blobPath)) { Fail "Template blob missing at $blobPath." }
+            $today = (Get-Date).ToString("yyyy-MM-dd")
+            $yesterday = (Get-Date).AddDays(-1).ToString("yyyy-MM-dd")
+            $tmpl = Get-Content $blobPath -Raw
+            $tmpl = $tmpl -replace '{{ *currentDate *}}', $today
+            $tmpl = $tmpl -replace '{{ *yesterdayDate *}}', $yesterday
+            $tmpModelfile = New-TemporaryFile
+            "FROM $Model`nTEMPLATE `"`"`"$tmpl`"`"`"`n" | Set-Content -Path $tmpModelfile -NoNewline
+            & ollama create $Model -f $tmpModelfile.FullName | Out-Null
+            Remove-Item $tmpModelfile -Force
+            Info "Patched template applied to $Model"
+        }
+    } finally { $env:OLLAMA_HOST = $prev }
     Info "Model '$Model' is ready"
 }
 

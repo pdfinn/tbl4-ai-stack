@@ -123,6 +123,41 @@ if [ "$USE_LOCAL" = "1" ] && [ "$USE_CLOUD" = "0" ]; then
     echo
     echo "Pulling model: ${MODEL} (first time can take a few minutes)"
     ollama pull "${MODEL}"
+
+    # Some Mistral library templates (e.g. ministral-3:3b) call template
+    # helpers — currentDate, yesterdayDate — that older Ollama builds
+    # don't define, breaking every chat with:
+    #   template: :14: function "yesterdayDate" not defined
+    # If the local Ollama can't render the model's template, rebuild the
+    # model under the same tag with those references substituted out.
+    if ! ollama show --template "${MODEL}" >/dev/null 2>&1; then
+        warn "Model template uses helpers missing from this Ollama; patching..."
+        model_name="${MODEL%:*}"
+        model_tag="${MODEL##*:}"
+        [ "${model_name}" = "${MODEL}" ] && model_tag="latest"
+        manifest_path="${HOME}/.ollama/models/manifests/registry.ollama.ai/library/${model_name}/${model_tag}"
+        if [ ! -f "${manifest_path}" ]; then
+            fail "Cannot locate Ollama manifest at ${manifest_path}. Upgrade Ollama (https://ollama.com/download) and re-run."
+        fi
+        tmpl_digest=$(python3 -c "import json; m=json.load(open('${manifest_path}')); print(next(l['digest'] for l in m['layers'] if l['mediaType']=='application/vnd.ollama.image.template').split(':',1)[1])") \
+            || fail "Could not parse template layer from manifest."
+        blob_path="${HOME}/.ollama/models/blobs/sha256-${tmpl_digest}"
+        [ -f "${blob_path}" ] || fail "Template blob missing at ${blob_path}."
+        today=$(date +%F)
+        yesterday=$(date -v-1d +%F)
+        tmp_modelfile=$(mktemp -t tbl4-modelfile)
+        {
+            echo "FROM ${MODEL}"
+            printf 'TEMPLATE """'
+            sed -e "s|{{ *currentDate *}}|${today}|g" \
+                -e "s|{{ *yesterdayDate *}}|${yesterday}|g" \
+                "${blob_path}"
+            printf '"""\n'
+        } > "${tmp_modelfile}"
+        ollama create "${MODEL}" -f "${tmp_modelfile}" >/dev/null
+        rm -f "${tmp_modelfile}"
+        info "Patched template applied to ${MODEL}"
+    fi
     info "Model '${MODEL}' is ready"
 fi
 

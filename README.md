@@ -77,9 +77,9 @@ Edit the `MODEL` line in `.env`, then re-run setup. Browse models at [ollama.com
 
 | Model | Size | Notes |
 |-------|------|-------|
-| `ministral-3:3b` | 3B | Default. Apache 2.0, native tool calling. Fits 8GB RAM. |
-| `mistral` | 7B | Larger Mistral sibling. More headroom for nuance, needs 16GB to be comfortable. |
-| `llama3.1:8b` | 8B | Alternative 8B with reliable tool calling. |
+| `llama3.1:latest` | 8B | Default. Reliable tool calling. Same model as the [tbl4-local-llm](https://github.com/pdfinn/tbl4-local-llm) setup. |
+| `llama3.2` | 3B | Faster, smaller — but tool calling is unreliable. |
+| `mistral` | 7B | Apache 2.0 alternative with native tool calling. |
 | `gpt-oss:20b` | 20B | Better tool calling on capable machines (32GB+). |
 
 ## Stop and restart
@@ -132,7 +132,8 @@ The Python tool is the path that works today; the MCP path will light up once on
 | First launch shows a blank OpenWebUI page | Wait ~60s — it downloads HuggingFace assets on first start |
 | Want a clean slate | Run the teardown script and answer "y" to volume removal, then re-run setup |
 | macOS: setup file blocked by Gatekeeper | Right-click `setup_macos.command` → **Open** → **Open** (one-time approval) |
-| Running on a MacBook Neo (8GB RAM, A18 Pro) | The default `ministral-3:3b` fits. Avoid `mistral` / `llama3.1:8b` — they swap heavily. Stick to the local profile (containerised Ollama on Neo loses Metal acceleration). |
+| Running on a MacBook Neo (8GB RAM, A18 Pro) | The default `llama3.1:latest` (8B) will swap on 8GB. Switch `MODEL` to a smaller model like `llama3.2` (3B). Stick to the local profile (containerised Ollama on Neo loses Metal acceleration). |
+| Chat fails with `template: :14: function "yesterdayDate" not defined` | Your local Ollama is too old for the model's prompt template (seen on `ministral-3:3b`). Either upgrade Ollama (`brew upgrade ollama` and restart) or switch `MODEL` to `llama3.1:latest`. |
 
 ## License
 
