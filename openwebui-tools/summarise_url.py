@@ -2,7 +2,7 @@
 title: Summarise URL
 description: Fetches a web page and asks the local n8n workflow to summarise it.
 author: TBL4
-version: 1.1
+version: 1.2
 """
 import requests
 from pydantic import BaseModel, Field
@@ -14,7 +14,7 @@ class Tools:
             # tbl4-ai-stack runs n8n in the same compose network, so OpenWebUI
             # reaches it at the service name. Override only if the n8n service
             # is renamed or you point this stack at a remote n8n.
-            default="http://n8n:5678/webhook/summariseUrl/webhook/summarise-url",
+            default="http://n8n:5678/webhook/summarise-url",
             description="n8n webhook URL for the Summarise URL workflow.",
         )
         timeout_seconds: int = Field(
