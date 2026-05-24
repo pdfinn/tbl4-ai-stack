@@ -86,8 +86,24 @@ Set-EnvVar "OLLAMA_HOST"     $ollamaUrl
 try { $null = Get-Command docker -ErrorAction Stop }
 catch { Fail "Docker is not installed. Install Docker Desktop:`nhttps://www.docker.com/products/docker-desktop/" }
 
-try { $null = docker info 2>&1 }
-catch { Fail "Docker is not running. Start Docker Desktop and try again." }
+function Test-DockerUp { docker info 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) }
+if (-not (Test-DockerUp)) {
+    $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path $dockerExe) {
+        Warn "Docker is not running. Starting Docker Desktop..."
+        Start-Process -FilePath $dockerExe | Out-Null
+        # Docker Desktop can take 30–60s to come up on first launch.
+        for ($i = 0; $i -lt 90; $i++) {
+            if (Test-DockerUp) { break }
+            Start-Sleep -Seconds 2
+        }
+        if (-not (Test-DockerUp)) {
+            Fail "Docker Desktop didn't become ready within 3 minutes. Open it manually and re-run."
+        }
+    } else {
+        Fail "Docker is not running and Docker Desktop is not installed at '$dockerExe'. Install Docker Desktop:`nhttps://www.docker.com/products/docker-desktop/"
+    }
+}
 Info "Docker is running"
 
 # ─── Host Ollama (local profile only) ────────────────────────────────────────

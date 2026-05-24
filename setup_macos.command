@@ -89,7 +89,21 @@ if ! command -v docker &>/dev/null; then
     https://www.docker.com/products/docker-desktop/"
 fi
 if ! docker info &>/dev/null; then
-    fail "Docker is not running. Open Docker Desktop and try again."
+    if [ -d "/Applications/Docker.app" ]; then
+        warn "Docker is not running. Starting Docker Desktop..."
+        open -a Docker
+        # Docker Desktop can take 30–60s to come up on first launch.
+        for i in {1..90}; do
+            docker info &>/dev/null && break
+            sleep 2
+        done
+        if ! docker info &>/dev/null; then
+            fail "Docker Desktop didn't become ready within 3 minutes. Open it manually and re-run."
+        fi
+    else
+        fail "Docker is not running and /Applications/Docker.app is not present. Install Docker Desktop:
+    https://www.docker.com/products/docker-desktop/"
+    fi
 fi
 info "Docker is running"
 
