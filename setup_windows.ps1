@@ -62,7 +62,7 @@ if (-not $envVars.ContainsKey("WEBUI_SECRET_KEY") -or [string]::IsNullOrEmpty($e
 }
 
 $Profiles  = if ($envVars["PROFILES"])   { $envVars["PROFILES"]   } else { "local"   }
-$Model     = if ($envVars["MODEL"])      { $envVars["MODEL"]      } else { "mistral" }
+$Model     = if ($envVars["MODEL"])      { $envVars["MODEL"]      } else { "llama3.2" }
 $WebuiPort = if ($envVars["WEBUI_PORT"]) { $envVars["WEBUI_PORT"] } else { "3000"    }
 $N8nPort   = if ($envVars["N8N_PORT"])   { $envVars["N8N_PORT"]   } else { "5678"    }
 
