@@ -10,12 +10,105 @@
 #
 # Students: just double-click setup_windows.bat in File Explorer.
 # This file is the internal script the wrapper calls.
+#
+# -WSLSetup re-invokes this script elevated to do the one-time, admin-only
+# WSL 2 work (see Invoke-WslSetup). Students never pass it by hand.
+param([switch]$WSLSetup)
 
 $ErrorActionPreference = "Stop"
 
 function Info($msg)  { Write-Host "[OK]  $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "[!!]  $msg" -ForegroundColor Yellow }
 function Fail($msg)  { Write-Host "[ERR] $msg" -ForegroundColor Red; exit 1 }
+
+# ─── WSL 2 preflight ───────────────────────────────────────────────────────────
+# Docker Desktop's engine runs on the WSL 2 backend, and on a fresh Windows
+# machine that backend is the usual blocker: the Windows features aren't enabled,
+# or the Linux kernel component is stale ("WSL 2 requires an update to its kernel
+# component"). We fix that automatically — the one step that needs admin —
+# before we ever touch Docker. State flags live under LOCALAPPDATA so we don't
+# re-prompt for elevation on every run.
+$Tbl4StateDir  = Join-Path $env:LOCALAPPDATA "tbl4-ai-stack"
+$WslReadyFlag  = Join-Path $Tbl4StateDir "wsl-ready"
+$WslRebootFlag = Join-Path $Tbl4StateDir "wsl-reboot-needed"
+
+function Test-WslHealthy {
+    if (-not (Test-Path $WslReadyFlag)) { return $false }
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return $false }
+    & wsl.exe --status 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Runs ELEVATED (re-invoked via -WSLSetup). Enables the WSL / Virtual Machine
+# Platform Windows features and updates the kernel. Signals back to the
+# non-admin parent through flag files: wsl-reboot-needed (features were just
+# turned on, a restart is required) or wsl-ready (everything is in place).
+function Invoke-WslSetup {
+    New-Item -ItemType Directory -Force -Path $Tbl4StateDir | Out-Null
+    Remove-Item $WslReadyFlag, $WslRebootFlag -ErrorAction SilentlyContinue
+
+    $rebootNeeded = $false
+    foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform")) {
+        if ((Get-WindowsOptionalFeature -Online -FeatureName $feature).State -ne "Enabled") {
+            Write-Host "Enabling Windows feature: $feature"
+            $result = Enable-WindowsOptionalFeature -Online -FeatureName $feature -All -NoRestart
+            if ($result.RestartNeeded) { $rebootNeeded = $true }
+        }
+    }
+
+    if ($rebootNeeded) {
+        New-Item -ItemType File -Force -Path $WslRebootFlag | Out-Null
+        return
+    }
+
+    # Features are on; bring the kernel up to date. --web-download avoids a hard
+    # dependency on the Microsoft Store (often disabled on school machines).
+    Write-Host "Updating the WSL 2 kernel..."
+    & wsl.exe --update 2>$null
+    if ($LASTEXITCODE -ne 0) { & wsl.exe --update --web-download 2>$null }
+    & wsl.exe --set-default-version 2 2>$null | Out-Null
+
+    New-Item -ItemType File -Force -Path $WslReadyFlag | Out-Null
+}
+
+# Elevated entry point — do only the WSL work and exit.
+if ($WSLSetup) { Invoke-WslSetup; exit 0 }
+
+# Ensures the WSL 2 backend is present and current before we rely on Docker.
+# Self-elevates once (UAC) to do the admin-only feature/kernel work.
+function Ensure-Wsl {
+    $build = [int][System.Environment]::OSVersion.Version.Build
+    if ($build -lt 19041) {
+        Fail "This stack needs WSL 2, which requires Windows 10 version 2004 (build 19041) or newer.`nYou're on build $build. Run Windows Update, restart, and try again."
+    }
+
+    if (Test-WslHealthy) { Info "WSL 2 backend is ready"; return }
+
+    Warn "Setting up the WSL 2 backend Docker needs. Windows will ask for administrator approval."
+    Remove-Item $WslRebootFlag -ErrorAction SilentlyContinue
+    try {
+        Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", "`"$PSCommandPath`"", "-WSLSetup") | Out-Null
+    } catch {
+        Fail "Administrator approval is required to enable WSL 2. Re-run setup and choose 'Yes' at the prompt, or enable WSL manually:`nhttps://learn.microsoft.com/windows/wsl/install"
+    }
+
+    if (Test-Path $WslRebootFlag) {
+        Remove-Item $WslRebootFlag -ErrorAction SilentlyContinue
+        Write-Host ""
+        Warn "Windows turned on the features WSL 2 needs, but they only take effect after a restart."
+        Write-Host "  1. Restart your computer."
+        Write-Host "  2. Double-click setup_windows.bat again to finish."
+        Write-Host ""
+        exit 0
+    }
+
+    if (-not (Test-WslHealthy)) {
+        Fail "WSL 2 setup didn't complete. This usually means hardware virtualization is turned off in your PC's BIOS/UEFI.`nReboot into BIOS/UEFI, enable 'Virtualization' (Intel VT-x / AMD-V / SVM), save, then re-run setup.`nMore help: https://learn.microsoft.com/windows/wsl/install"
+    }
+    Info "WSL 2 backend is ready"
+}
 
 Write-Host ""
 Write-Host "========================================="
@@ -82,9 +175,38 @@ if ($useCloud) {
 Set-EnvVar "OLLAMA_BASE_URL" $ollamaUrl
 Set-EnvVar "OLLAMA_HOST"     $ollamaUrl
 
+# ─── WSL 2 backend ───────────────────────────────────────────────────────────
+# Must run before Docker: Docker Desktop's engine won't start without it, and
+# this is the step students get stuck on most.
+Ensure-Wsl
+
 # ─── Docker ──────────────────────────────────────────────────────────────────
 try { $null = Get-Command docker -ErrorAction Stop }
-catch { Fail "Docker is not installed. Install Docker Desktop:`nhttps://www.docker.com/products/docker-desktop/" }
+catch {
+    # Hand off to the official Docker Desktop installer rather than silently
+    # winget-installing it: the GUI surfaces the WSL 2 option and the EULA, and
+    # Docker Desktop often needs a sign-out/restart before its CLI is on PATH.
+    Warn "Docker Desktop isn't installed yet."
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+    $installer = Join-Path $env:TEMP "DockerDesktopInstaller.exe"
+    $url = "https://desktop.docker.com/win/main/$arch/Docker Desktop Installer.exe"
+    try {
+        Write-Host "Downloading the official Docker Desktop installer ($arch)..."
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+    } catch {
+        Fail "Couldn't download Docker Desktop automatically. Install it by hand, then re-run setup:`nhttps://www.docker.com/products/docker-desktop/"
+    }
+    Write-Host ""
+    Warn "Launching the Docker Desktop installer."
+    Write-Host "  - Keep the 'Use WSL 2 instead of Hyper-V' option checked."
+    Write-Host "  - When it finishes it may ask you to sign out or restart."
+    Write-Host "  - Then double-click setup_windows.bat again to finish."
+    Start-Process -FilePath $installer
+    Write-Host ""
+    Read-Host "Press Enter to close this window"
+    exit 0
+}
 
 function Test-DockerUp { docker info 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) }
 if (-not (Test-DockerUp)) {

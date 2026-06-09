@@ -35,9 +35,16 @@ This repo is the everything-in-one path. The two single-purpose stacks remain av
 
 ## Prerequisites
 
-- **Docker Desktop** — [download](https://www.docker.com/products/docker-desktop/). Run the installer; on Windows allow the WSL 2 prompt and reboot when asked.
+- **Docker Desktop** — [download](https://www.docker.com/products/docker-desktop/).
 
-The setup script handles everything else, including installing Ollama on local-profile installs.
+On **Windows**, you can skip the manual download: the setup script bootstraps the prerequisites for you. It configures the WSL 2 backend automatically (enabling the required Windows features and updating the kernel — the step students most often get stuck on) and, if Docker Desktop isn't installed, downloads the official installer and launches it. You'll see:
+
+- **one administrator prompt** the first time, so it can turn on WSL 2, and
+- possibly **one restart** if those Windows features had to be enabled — just reboot and double-click `setup_windows.bat` again to finish.
+
+On **macOS**, install Docker Desktop first; the setup script handles everything else.
+
+The setup script also installs Ollama on local-profile installs.
 
 ## Setup
 
@@ -125,6 +132,10 @@ The Python tool is the path that works today; the MCP path will light up once on
 
 | Problem | Fix |
 |---------|-----|
+| Windows: setup asks for administrator approval | Expected on first run — it's enabling the WSL 2 backend Docker needs. Choose **Yes**. If you decline, re-run `setup_windows.bat` and approve it. |
+| Windows: setup says to restart and re-run | Windows just enabled the WSL 2 features; they only take effect after a reboot. Restart, then double-click `setup_windows.bat` again. |
+| Windows: "WSL 2 setup didn't complete" | Hardware virtualization is almost always turned off in BIOS/UEFI. Reboot into BIOS/UEFI, enable **Virtualization** (Intel VT-x / AMD-V / SVM), save, and re-run setup. |
+| Windows: "requires Windows 10 version 2004 / build 19041 or newer" | WSL 2 needs a newer Windows build. Run **Windows Update**, restart, and try again. |
 | "Docker is not running" | Open Docker Desktop and wait for it to finish starting |
 | OpenWebUI shows "Ollama not reachable" (local profile) | `ollama serve`, or just re-run the setup script |
 | Summary returns empty body | The model name in `.env` doesn't match a tag on Ollama. `ollama list` to check; pull the right tag or change `MODEL`. |

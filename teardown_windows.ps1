@@ -37,6 +37,11 @@ if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history
     # the next setup to non-default ports / secrets.
     Remove-Item -Path .env -Force -ErrorAction SilentlyContinue
     Info ".env removed"
+    # Clear the WSL-ready marker so the next setup re-verifies the backend.
+    # We leave the Windows features themselves enabled — disabling them is
+    # invasive and other tools may rely on WSL.
+    Remove-Item -Path (Join-Path $env:LOCALAPPDATA "tbl4-ai-stack") -Recurse -Force -ErrorAction SilentlyContinue
+    Info "WSL setup marker cleared"
 } else {
     Skip "tbl4-ai-stack state"
 }
