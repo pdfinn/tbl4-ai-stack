@@ -39,6 +39,8 @@ This repo is the everything-in-one path. The two single-purpose stacks remain av
 
 The setup script handles everything else, including installing Ollama on local-profile installs.
 
+> **Windows:** Docker Desktop needs WSL2 and hardware virtualization. If setup reports the engine won't start, right-click **`preflight_windows.bat`** → **Run as administrator** once. It enables the required Windows features, updates the WSL2 kernel, and tells you if virtualization is turned off in your BIOS/UEFI (the one thing it can't fix for you). Reboot if it asks, then run setup.
+
 ## Setup
 
 1. [Download as a ZIP](https://github.com/pdfinn/tbl4-ai-stack/archive/refs/heads/main.zip) and unzip it.
@@ -126,6 +128,9 @@ The Python tool is the path that works today; the MCP path will light up once on
 | Problem | Fix |
 |---------|-----|
 | "Docker is not running" | Open Docker Desktop and wait for it to finish starting |
+| Windows: `docker ... request returned 500 Internal Server Error` / engine won't start | WSL2 or virtualization isn't ready. Run `preflight_windows.bat` as administrator (enables features + updates WSL), reboot if asked, then re-run setup. If it reports "Virtualization Enabled In Firmware: No", enable VT-x/AMD-V in your BIOS/UEFI. |
+| Windows: `The argument 'setup_windows.ps1' ... does not exist` | The ZIP extracted into a nested folder. Open the inner folder that actually contains `setup_windows.bat` and run it from there. |
+| Windows: setup banner looks garbled (`â€"`, stray `Write-Host`) | An old copy of the scripts. Re-download the latest ZIP — the scripts now ship as UTF-8 with a BOM so PowerShell reads them correctly. |
 | OpenWebUI shows "Ollama not reachable" (local profile) | `ollama serve`, or just re-run the setup script |
 | Summary returns empty body | The model name in `.env` doesn't match a tag on Ollama. `ollama list` to check; pull the right tag or change `MODEL`. |
 | Port 3000 / 5678 already in use | Edit `WEBUI_PORT` / `N8N_PORT` in `.env`, re-run setup |

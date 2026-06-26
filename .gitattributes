@@ -1,0 +1,6 @@
+# Windows scripts ship as committed: the .ps1 files are UTF-8 *with a BOM*
+# (Windows PowerShell 5.1 decodes BOM-less UTF-8 as the ANSI codepage and
+# mangles non-ASCII, which corrupted the setup banner). Treat them as binary
+# so git never rewrites line endings or strips the BOM on clone or ZIP export.
+*.ps1 -text
+*.bat -text

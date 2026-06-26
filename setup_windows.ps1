@@ -1,11 +1,11 @@
-# ─── tbl4-ai-stack Setup (Windows) ─────────────────────────────────────────────
+﻿# --- tbl4-ai-stack Setup (Windows) ---------------------------------------------
 # Brings up the unified classroom stack: OpenWebUI + n8n + auto-bootstrapper
 # and (optionally) containerised Ollama and the mcpo MCP proxy.
 #
 # Profiles are driven by the PROFILES line in .env (comma-separated):
-#   local — Ollama runs on the host (default; uses GPU)
-#   cloud — Ollama runs as a container in the stack
-#   mcp   — adds the mcpo proxy
+#   local - Ollama runs on the host (default; uses GPU)
+#   cloud - Ollama runs as a container in the stack
+#   mcp   - adds the mcpo proxy
 # Combine freely, e.g. PROFILES=cloud,mcp
 #
 # Students: just double-click setup_windows.bat in File Explorer.
@@ -19,11 +19,11 @@ function Fail($msg)  { Write-Host "[ERR] $msg" -ForegroundColor Red; exit 1 }
 
 Write-Host ""
 Write-Host "========================================="
-Write-Host "  Tarkas Brainlab IV — Stack Setup"
+Write-Host "  Tarkas Brainlab IV - Stack Setup"
 Write-Host "========================================="
 Write-Host ""
 
-# ─── .env ────────────────────────────────────────────────────────────────────
+# --- .env --------------------------------------------------------------------
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
     Info "Created .env from .env.example"
@@ -82,23 +82,98 @@ if ($useCloud) {
 Set-EnvVar "OLLAMA_BASE_URL" $ollamaUrl
 Set-EnvVar "OLLAMA_HOST"     $ollamaUrl
 
-# ─── Docker ──────────────────────────────────────────────────────────────────
+# --- Docker ------------------------------------------------------------------
 try { $null = Get-Command docker -ErrorAction Stop }
 catch { Fail "Docker is not installed. Install Docker Desktop:`nhttps://www.docker.com/products/docker-desktop/" }
 
-function Test-DockerUp { docker info 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) }
+# 'docker info' writes to stderr when the engine is down. Under
+# $ErrorActionPreference='Stop', PowerShell turns that stderr into a
+# terminating NativeCommandError (the red "request returned 500 ..."
+# wall students were seeing). Silence the stream and judge by exit code.
+function Test-DockerUp {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & docker info 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
+# Diagnose the usual Windows blockers (virtualization off in firmware,
+# WSL2 missing or stale) and self-heal what is safe to. Returns nothing;
+# prints guidance. Never reboots or changes BIOS - it can't.
+function Show-DockerHelp {
+    Write-Host ""
+    Warn "Docker's engine isn't responding. On Windows this is almost always"
+    Warn "WSL2 or hardware virtualization. Checking..."
+    Write-Host ""
+
+    # 1) Virtualization enabled in firmware (BIOS/UEFI)?
+    #    If a hypervisor is already present, virtualization is effectively on
+    #    even when the firmware flag reads False (Hyper-V owns it).
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $cpu = Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        if ($cs.HypervisorPresent) {
+            Info "Virtualization: a hypervisor is running (OK)"
+        } elseif ($cpu.VirtualizationFirmwareEnabled -eq $false) {
+            Fail @"
+Virtualization is DISABLED in your firmware (BIOS/UEFI).
+Docker Desktop cannot run until you turn it on:
+  1. Reboot and enter BIOS/UEFI setup (usually F2, F10, DEL, or ESC at boot).
+  2. Enable the CPU virtualization feature:
+       Intel:  'Intel VT-x' / 'Virtualization Technology'
+       AMD:    'SVM Mode' / 'AMD-V'
+  3. Save, reboot, then re-run this setup.
+Verify later with:  systeminfo  (look for 'Virtualization Enabled In Firmware: Yes')
+"@
+        } else {
+            Info "Virtualization: enabled in firmware (OK)"
+        }
+    } catch {
+        Warn "Could not read virtualization status; continuing."
+    }
+
+    # 2) WSL2: update the kernel (safe, no reboot) and pin default version 2.
+    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if (-not $wsl) {
+        Fail @"
+WSL is not installed. Open PowerShell as Administrator and run:
+  wsl --install
+Reboot, then re-run this setup. (This also enables the required
+Windows features: Virtual Machine Platform and WSL.)
+"@
+    } else {
+        Warn "Updating the WSL2 kernel (wsl --update)..."
+        try { & wsl.exe --update 2>&1 | Out-Null } catch {}
+        try { & wsl.exe --set-default-version 2 2>&1 | Out-Null } catch {}
+        Info "WSL2 kernel updated and default version set to 2"
+    }
+
+    Write-Host ""
+    Warn "If virtualization and WSL2 look OK above, the engine may just need a"
+    Warn "moment: open Docker Desktop, wait for the whale to stop animating,"
+    Warn "then re-run this setup. For a full one-shot fixer, run"
+    Warn "preflight_windows.bat (right-click -> Run as administrator)."
+}
+
 if (-not (Test-DockerUp)) {
     $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
     if (Test-Path $dockerExe) {
         Warn "Docker is not running. Starting Docker Desktop..."
         Start-Process -FilePath $dockerExe | Out-Null
-        # Docker Desktop can take 30–60s to come up on first launch.
+        # Docker Desktop can take 30-60s to come up on first launch.
         for ($i = 0; $i -lt 90; $i++) {
             if (Test-DockerUp) { break }
             Start-Sleep -Seconds 2
         }
         if (-not (Test-DockerUp)) {
-            Fail "Docker Desktop didn't become ready within 3 minutes. Open it manually and re-run."
+            Show-DockerHelp
+            Fail "Docker Desktop didn't become ready within 3 minutes. Resolve the items above and re-run."
         }
     } else {
         Fail "Docker is not running and Docker Desktop is not installed at '$dockerExe'. Install Docker Desktop:`nhttps://www.docker.com/products/docker-desktop/"
@@ -106,7 +181,7 @@ if (-not (Test-DockerUp)) {
 }
 Info "Docker is running"
 
-# ─── Host Ollama (local profile only) ────────────────────────────────────────
+# --- Host Ollama (local profile only) ----------------------------------------
 if ($useLocal -and -not $useCloud) {
     $ollamaInstalled = $false
     try { $null = Get-Command ollama -ErrorAction Stop; $ollamaInstalled = $true } catch {}
@@ -168,7 +243,7 @@ if ($useLocal -and -not $useCloud) {
         & ollama pull $Model
 
         # Some Mistral library templates (e.g. ministral-3:3b) call template
-        # helpers — currentDate, yesterdayDate — that older Ollama builds
+        # helpers - currentDate, yesterdayDate - that older Ollama builds
         # don't define, breaking every chat. If the local Ollama can't
         # render the template, rebuild the model under the same tag with
         # those references substituted out.
@@ -203,7 +278,7 @@ if ($useLocal -and -not $useCloud) {
     Info "Model '$Model' is ready"
 }
 
-# ─── Compose ─────────────────────────────────────────────────────────────────
+# --- Compose -----------------------------------------------------------------
 $profileFlags = @()
 if ($useCloud) { $profileFlags += @("--profile", "cloud") }
 if ($useMcp)   { $profileFlags += @("--profile", "mcp")   }
@@ -225,7 +300,7 @@ for ($i = 0; $i -lt 120; $i++) {
     Start-Sleep -Seconds 5
 }
 
-# ─── Done ────────────────────────────────────────────────────────────────────
+# --- Done --------------------------------------------------------------------
 Write-Host ""
 Write-Host "========================================="
 Write-Host "  Setup complete!"

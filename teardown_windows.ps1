@@ -1,4 +1,4 @@
-# ─── tbl4-ai-stack Teardown (Windows) ──────────────────────────────────────────
+﻿# --- tbl4-ai-stack Teardown (Windows) ------------------------------------------
 # Stops the stack and (optionally) deletes its volumes and host Ollama.
 # Asks for confirmation before each destructive step.
 #
@@ -19,16 +19,16 @@ function Confirm-Step($message) {
 
 Write-Host ""
 Write-Host "========================================="
-Write-Host "  Tarkas Brainlab IV — Stack Teardown"
+Write-Host "  Tarkas Brainlab IV - Stack Teardown"
 Write-Host "========================================="
 Write-Host ""
 
-# ─── Step 1: Stop containers (all profiles) ─────────────────────────────────
+# --- Step 1: Stop containers (all profiles) ---------------------------------
 Write-Host "Stopping containers..."
 & docker compose --profile cloud --profile mcp down
 Info "Containers stopped"
 
-# ─── Step 2: Delete volumes ──────────────────────────────────────────────────
+# --- Step 2: Delete volumes --------------------------------------------------
 if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history, workflows, tools, custom settings)?") {
     & docker compose --profile cloud --profile mcp down -v
     Info "Volumes deleted"
@@ -41,7 +41,7 @@ if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history
     Skip "tbl4-ai-stack state"
 }
 
-# ─── Step 3: Uninstall Ollama (host, only if setup installed it) ─────────────
+# --- Step 3: Uninstall Ollama (host, only if setup installed it) -------------
 # Only offer to uninstall Ollama if *this* repo's setup installed it.
 # Setup drops .tbl4-installed-ollama; if the marker is absent the user had
 # Ollama from elsewhere (winget/manual install before running setup) and we
