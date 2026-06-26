@@ -34,9 +34,12 @@ services:
     restart: unless-stopped
 
   # ─── n8n-init ──────────────────────────────────────────────────────────────
-  # One-shot seeder: substitutes the Ollama URL into the credential template,
-  # imports it along with the starter workflows on a fresh volume, then exits.
-  # Idempotent via a sentinel file. n8n waits for this to finish.
+  # One-shot seeder: substitutes OLLAMA_BASE_URL into the credential template
+  # and MODEL into the workflow templates, imports both, then exits. The
+  # sentinel stores a fingerprint of those two inputs, so a PROFILES or MODEL
+  # change in .env triggers a re-seed on the next setup re-run (workflows
+  # land as drafts again; stack-init re-activates them). n8n waits for this
+  # to finish.
   n8n-init:
     image: docker.n8n.io/n8nio/n8n:2.18.2
     user: "node"
@@ -58,8 +61,10 @@ services:
     command:
       - |
         set -e
-        if [ -f /home/node/.n8n/.tbl4-seeded ]; then
-          echo "already seeded; skipping"
+        FP="$$OLLAMA_BASE_URL|$$MODEL"
+        SENTINEL=/home/node/.n8n/.tbl4-seeded
+        if [ -f "$$SENTINEL" ] && [ "$$(cat $$SENTINEL 2>/dev/null)" = "$$FP" ]; then
+          echo "already seeded with current config ($$FP); skipping"
           exit 0
         fi
         echo "seeding Ollama credential (baseUrl=$$OLLAMA_BASE_URL)..."
@@ -72,10 +77,9 @@ services:
         done
         echo "importing starter workflows..."
         n8n import:workflow --separate --input=/tmp/workflows-out/
-        # Workflows land as drafts. The stack-init service activates them
-        # via the n8n REST API once n8n is up — this gives clean webhook
-        # URLs (no workflow-ID prefix) and a fully zero-click first run.
-        touch /home/node/.n8n/.tbl4-seeded
+        # import:workflow lands records as drafts (active=false); stack-init
+        # activates them via REST so production webhook URLs register.
+        printf '%s' "$$FP" > "$$SENTINEL"
         echo "done"
     restart: "no"
 
@@ -104,10 +108,11 @@ services:
     restart: unless-stopped
 
   # ─── stack-init ────────────────────────────────────────────────────────────
-  # One-shot bootstrap: creates the n8n owner, activates the seeded workflows,
-  # creates the OpenWebUI admin, and registers the Summarise URL tool — so the
-  # first `docker compose up -d` lands on a fully working chain with zero
-  # clicks. Idempotent: a sentinel in /state short-circuits re-runs.
+  # One-shot bootstrap: creates (or logs into) the n8n owner, activates any
+  # inactive workflows, creates (or signs into) the OpenWebUI admin, and
+  # ensures the Summarise URL tool is registered (create or update). Every
+  # step is idempotent so a .env change (PROFILES, MODEL) flows through on
+  # re-run without a volume wipe.
   stack-init:
     image: python:3.12-alpine
     depends_on:
@@ -120,7 +125,6 @@ services:
     volumes:
       - ./stack-init/init.py:/app/init.py:ro
       - ./openwebui-tools:/app/openwebui-tools:ro
-      - stack_init_data:/state
     environment:
       - N8N_URL=http://n8n:5678
       - OWUI_URL=http://open-webui:8080
@@ -193,5 +197,4 @@ services:
 volumes:
   open-webui_data:
   n8n_data:
-  stack_init_data:
   ollama_data:

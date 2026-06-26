@@ -2,12 +2,13 @@
 """
 Zero-click bootstrap for tbl4-ai-stack.
 
-  1. Wait for n8n; create the owner; activate every seeded workflow.
-  2. Wait for OpenWebUI; create the admin; register the Summarise URL tool.
+  1. Wait for n8n; create/login the owner; activate every seeded workflow.
+  2. Wait for OpenWebUI; create/login the admin; ensure the Summarise URL
+     tool is registered (create or update).
 
-Idempotent. A sentinel file in /state lets us skip on re-runs of an already
-initialised volume; individual API steps also handle "already exists" gracefully.
-Pure stdlib — no pip installs.
+Fully idempotent — every step is safe to re-run, so PROFILES / MODEL /
+ports changes in .env take effect on the next setup re-run without
+needing a volume wipe. Pure stdlib — no pip installs.
 """
 import json
 import os
@@ -21,7 +22,6 @@ OWUI_URL = os.environ.get("OWUI_URL", "http://open-webui:8080")
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "student@example.com")
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "Ai-classroom-2026")
 TOOL_PATH = os.environ.get("TOOL_PATH", "/app/openwebui-tools/summarise_url.py")
-SENTINEL = "/state/.tbl4-ai-stack-init"
 
 
 def request(url, method="GET", data=None, headers=None, cookies=None):
@@ -116,59 +116,72 @@ def setup_n8n():
         print(f"  n8n: activated {w['name']!r}", flush=True)
 
 
-def setup_owui():
-    wait_for(f"{OWUI_URL}/health")
+def owui_token():
+    """Return an admin bearer token — sign up if first run, sign in otherwise."""
     code, body, _ = request(f"{OWUI_URL}/api/config")
     if code != 200:
         sys.exit(f"OpenWebUI config probe failed: HTTP {code}")
+    # OpenWebUI v0.9.1's /api/config doesn't expose an `onboarding` field;
+    # `features.enable_signup` is the canonical "is the admin slot still
+    # open?" signal -- true on a virgin install, flipped to false the
+    # moment a user is created.
     cfg = json.loads(body)
-    if not cfg.get("onboarding", True):
-        # Onboarded already; with WEBUI_AUTH=false we cannot retrieve a token,
-        # so trust prior init landed the tool. Sentinel will short-circuit
-        # next time, so this branch only fires on partial-init recovery.
-        print("  owui: already onboarded — skipping admin signup", flush=True)
-        return
-    code, body, _ = request(f"{OWUI_URL}/api/v1/auths/signup", "POST", {
-        "name": "Student",
-        "email": OWNER_EMAIL,
-        "password": OWNER_PASSWORD,
-    })
-    if code != 200:
-        sys.exit(f"OpenWebUI signup failed: HTTP {code} {body[:200]}")
-    token = json.loads(body)["token"]
-    print("  owui: admin created", flush=True)
+    if cfg.get("features", {}).get("enable_signup", True):
+        code, body, _ = request(f"{OWUI_URL}/api/v1/auths/signup", "POST", {
+            "name": "Student",
+            "email": OWNER_EMAIL,
+            "password": OWNER_PASSWORD,
+        })
+        if code != 200:
+            sys.exit(f"OpenWebUI signup failed: HTTP {code} {body[:200]}")
+        print("  owui: admin created", flush=True)
+    else:
+        code, body, _ = request(f"{OWUI_URL}/api/v1/auths/signin", "POST", {
+            "email": OWNER_EMAIL,
+            "password": OWNER_PASSWORD,
+        })
+        if code != 200:
+            sys.exit(f"OpenWebUI signin failed: HTTP {code} {body[:200]}")
+        print("  owui: signed in (already onboarded)", flush=True)
+    return json.loads(body)["token"]
+
+
+def setup_owui():
+    wait_for(f"{OWUI_URL}/health")
+    token = owui_token()
+    auth = {"Authorization": f"Bearer {token}"}
 
     with open(TOOL_PATH) as f:
         tool_source = f.read()
-    code, body, _ = request(
-        f"{OWUI_URL}/api/v1/tools/create",
-        "POST",
-        {
-            "id": "summarise_url",
-            "name": "Summarise URL",
-            "content": tool_source,
-            "meta": {
-                "description": "Fetch a web page and ask n8n to summarise it.",
-                "manifest": {},
-            },
+    payload = {
+        "id": "summarise_url",
+        "name": "Summarise URL",
+        "content": tool_source,
+        "meta": {
+            "description": "Fetch a web page and ask n8n to summarise it.",
+            "manifest": {},
         },
-        headers={"Authorization": f"Bearer {token}"},
+    }
+    # Try create; if the tool already exists, update it. Update is the path
+    # that lets PROFILES/MODEL/credential changes flow through to the running
+    # OpenWebUI without a volume wipe.
+    code, body, _ = request(f"{OWUI_URL}/api/v1/tools/create", "POST", payload, headers=auth)
+    if code == 200:
+        print("  owui: registered Summarise URL tool", flush=True)
+        return
+    code, body, _ = request(
+        f"{OWUI_URL}/api/v1/tools/id/summarise_url/update", "POST", payload, headers=auth,
     )
     if code != 200:
-        sys.exit(f"OpenWebUI tool register failed: HTTP {code} {body[:200]}")
-    print("  owui: registered Summarise URL tool", flush=True)
+        sys.exit(f"OpenWebUI tool register/update failed: HTTP {code} {body[:200]}")
+    print("  owui: updated Summarise URL tool", flush=True)
 
 
 def main():
-    if os.path.exists(SENTINEL):
-        print("already initialised; skipping")
-        return
     print("=== n8n ===", flush=True)
     setup_n8n()
     print("=== OpenWebUI ===", flush=True)
     setup_owui()
-    os.makedirs(os.path.dirname(SENTINEL), exist_ok=True)
-    open(SENTINEL, "w").close()
     print("=== done ===", flush=True)
 
 
