@@ -50,6 +50,10 @@ services:
       # Substituted into the credential at seed time. Default targets host
       # Ollama (local profile); cloud profile overrides this to ollama:11434.
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Substituted into the seeded workflows so n8n's Ollama node calls
+      # the same model the user picked in .env (otherwise students change
+      # MODEL, re-run, and get 'model not found' from a stale workflow).
+      - MODEL=${MODEL:-llama3.2}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -61,8 +65,13 @@ services:
         echo "seeding Ollama credential (baseUrl=$$OLLAMA_BASE_URL)..."
         sed "s|__OLLAMA_BASE_URL__|$$OLLAMA_BASE_URL|g" /tmp/credentials.tmpl.json > /tmp/credentials.json
         n8n import:credentials --input=/tmp/credentials.json
+        echo "substituting MODEL=$$MODEL into workflow templates..."
+        mkdir -p /tmp/workflows-out
+        for f in /tmp/workflows/*.json; do
+          sed "s|__MODEL__|$$MODEL|g" "$$f" > "/tmp/workflows-out/$$(basename "$$f")"
+        done
         echo "importing starter workflows..."
-        n8n import:workflow --separate --input=/tmp/workflows/
+        n8n import:workflow --separate --input=/tmp/workflows-out/
         # Workflows land as drafts. The stack-init service activates them
         # via the n8n REST API once n8n is up — this gives clean webhook
         # URLs (no workflow-ID prefix) and a fully zero-click first run.
