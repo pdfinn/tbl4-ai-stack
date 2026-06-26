@@ -306,13 +306,20 @@ Write-Host "Starting the stack..."
 
 Write-Host ""
 Write-Host "Bootstrapping (one-time; takes ~60s on a warm install)..."
-for ($i = 0; $i -lt 120; $i++) {
-    $cid = (& docker compose ps -aq stack-init 2>$null) -split "`n" | Select-Object -First 1
-    if ($cid) {
-        $state = (& docker inspect -f '{{.State.Status}}' $cid 2>$null)
-        if ($state -eq "exited") { break }
+# On cloud profile, ollama-init pulls the model inside the container; we
+# can't claim "Setup complete!" until that's actually done, or the first
+# chat 404s with "model not found".
+$initServices = @("stack-init")
+if ($useCloud) { $initServices += "ollama-init" }
+foreach ($svc in $initServices) {
+    for ($i = 0; $i -lt 240; $i++) {
+        $cid = (& docker compose ps -aq $svc 2>$null) -split "`n" | Select-Object -First 1
+        if ($cid) {
+            $state = (& docker inspect -f '{{.State.Status}}' $cid 2>$null)
+            if ($state -eq "exited") { break }
+        }
+        Start-Sleep -Seconds 5
     }
-    Start-Sleep -Seconds 5
 }
 
 # --- Done --------------------------------------------------------------------

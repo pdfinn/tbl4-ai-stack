@@ -197,13 +197,20 @@ compose pull --quiet
 echo "Starting the stack..."
 compose up -d
 
-# Wait for stack-init: it's the signal that the first-run bootstrap is done.
+# Wait for the init containers: stack-init is the first-run bootstrap
+# signal, and on cloud profile we must also wait for ollama-init to finish
+# pulling the model -- otherwise "Setup complete!" prints while the model
+# is still downloading and the first chat 404s with "model not found".
 echo
 echo "Bootstrapping (one-time; takes ~60s on a warm install)..."
-for i in {1..120}; do
-    state=$(docker inspect -f '{{.State.Status}}' "$(docker compose ps -aq stack-init 2>/dev/null)" 2>/dev/null || echo "missing")
-    [ "$state" = "exited" ] && break
-    sleep 5
+init_services=("stack-init")
+[ "$USE_CLOUD" = "1" ] && init_services+=("ollama-init")
+for svc in "${init_services[@]}"; do
+    for i in {1..240}; do
+        state=$(docker inspect -f '{{.State.Status}}' "$(docker compose ps -aq "$svc" 2>/dev/null)" 2>/dev/null || echo "missing")
+        [ "$state" = "exited" ] && break
+        sleep 5
+    done
 done
 
 # ─── Done ──────────────────────────────────────────────────────────────────
