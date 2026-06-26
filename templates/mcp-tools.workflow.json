@@ -8,6 +8,7 @@
       "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
       "typeVersion": 2,
       "position": [320, 400],
+      "webhookId": "dfe6e05a-f214-4a22-b69e-dd488d8d784f",
       "parameters": {
         "authentication": "none",
         "path": "tools"
@@ -22,7 +23,7 @@
       "parameters": {
         "toolDescription": "Fetches the given URL and returns a short summary. Use when the user asks you to summarise, explain, or describe the content of a URL.",
         "method": "POST",
-        "url": "http://localhost:5678/webhook/summariseUrl/webhook/summarise-url",
+        "url": "http://localhost:5678/webhook/summarise-url",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"url\": \"{url}\",\n  \"focus\": \"{focus}\"\n}",
