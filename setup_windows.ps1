@@ -86,22 +86,27 @@ Set-EnvVar "OLLAMA_HOST"     $ollamaUrl
 try { $null = Get-Command docker -ErrorAction Stop }
 catch { Fail "Docker is not installed. Install Docker Desktop:`nhttps://www.docker.com/products/docker-desktop/" }
 
-# 'docker info' writes to stderr when the engine is down. Under
-# $ErrorActionPreference='Stop', PowerShell turns that stderr into a
-# terminating NativeCommandError (the red "request returned 500 ..."
-# wall students were seeing). Silence the stream and judge by exit code.
-function Test-DockerUp {
+# Run a native command with all streams discarded; return its exit code.
+# Under $ErrorActionPreference='Stop', any stderr write from a native exe
+# becomes a terminating NativeCommandError -- even `2>$null` does not
+# suppress that. Lower EAP for the call so we get the exit code instead
+# of an abort. (This was the red "request returned 500..." wall for
+# 'docker info' when the engine was down; same trap kills 'ollama show'
+# when a model isn't pulled.)
+function Invoke-NativeQuietExit([scriptblock]$Script) {
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'SilentlyContinue'
     try {
-        & docker info 2>&1 | Out-Null
-        return ($LASTEXITCODE -eq 0)
+        & $Script 2>&1 | Out-Null
+        return $LASTEXITCODE
     } catch {
-        return $false
+        return 1
     } finally {
         $ErrorActionPreference = $prevEAP
     }
 }
+
+function Test-DockerUp { return (Invoke-NativeQuietExit { & docker info }) -eq 0 }
 
 # Diagnose the usual Windows blockers (virtualization off in firmware,
 # WSL2 missing or stale) and self-heal what is safe to. Returns nothing;
@@ -241,14 +246,19 @@ if ($useLocal -and -not $useCloud) {
     $prev = $env:OLLAMA_HOST; $env:OLLAMA_HOST = $null
     try {
         & ollama pull $Model
+        if ($LASTEXITCODE -ne 0) {
+            Fail "ollama pull '$Model' failed (exit $LASTEXITCODE). Check the network and re-run setup."
+        }
 
         # Some Mistral library templates (e.g. ministral-3:3b) call template
         # helpers - currentDate, yesterdayDate - that older Ollama builds
         # don't define, breaking every chat. If the local Ollama can't
         # render the template, rebuild the model under the same tag with
-        # those references substituted out.
-        & ollama show --template $Model 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        # those references substituted out. Run via Invoke-NativeQuietExit
+        # so a "model not found" stderr line (e.g. after an aborted pull)
+        # doesn't abort this script via NativeCommandError.
+        $showExit = Invoke-NativeQuietExit { & ollama show --template $Model }
+        if ($showExit -ne 0) {
             Warn "Model template uses helpers missing from this Ollama; patching..."
             $parts = $Model.Split(':', 2)
             $modelName = $parts[0]
@@ -269,9 +279,14 @@ if ($useLocal -and -not $useCloud) {
             $tmpl = $tmpl -replace '{{ *currentDate *}}', $today
             $tmpl = $tmpl -replace '{{ *yesterdayDate *}}', $yesterday
             $tmpModelfile = New-TemporaryFile
-            "FROM $Model`nTEMPLATE `"`"`"$tmpl`"`"`"`n" | Set-Content -Path $tmpModelfile -NoNewline
-            & ollama create $Model -f $tmpModelfile.FullName | Out-Null
+            # Set-Content's PS 5.1 default is UTF-16 LE with BOM; ollama
+            # rejects that. WriteAllText is UTF-8 without BOM by default.
+            [System.IO.File]::WriteAllText($tmpModelfile.FullName, "FROM $Model`nTEMPLATE `"`"`"$tmpl`"`"`"`n")
+            $createExit = Invoke-NativeQuietExit { & ollama create $Model -f $tmpModelfile.FullName }
             Remove-Item $tmpModelfile -Force
+            if ($createExit -ne 0) {
+                Fail "ollama create '$Model' failed (exit $createExit). Template patch did not apply."
+            }
             Info "Patched template applied to $Model"
         }
     } finally { $env:OLLAMA_HOST = $prev }
