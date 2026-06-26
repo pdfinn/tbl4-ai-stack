@@ -129,7 +129,7 @@ The Python tool is the path that works today; the MCP path will light up once on
 |---------|-----|
 | "Docker is not running" | Open Docker Desktop and wait for it to finish starting |
 | Windows: `docker ... request returned 500 Internal Server Error` / engine won't start | WSL2 or virtualization isn't ready. Run `preflight_windows.bat` as administrator (enables features + updates WSL), reboot if asked, then re-run setup. If it reports "Virtualization Enabled In Firmware: No", enable VT-x/AMD-V in your BIOS/UEFI. |
-| Windows: `The argument 'setup_windows.ps1' ... does not exist` | The ZIP extracted into a nested folder. Open the inner folder that actually contains `setup_windows.bat` and run it from there. |
+| Windows: `[ERR] ollama pull '...' failed (exit 1)` after the download reached 100% (mentions a `...-partial-0` blob path) | Windows Defender real-time scanning is racing Ollama's rename of the just-downloaded blob. Either re-run setup (Ollama resumes the partial download and usually wins the second pass), or add `%USERPROFILE%\.ollama` to **Windows Security → Virus & threat protection → Exclusions** and try once more. |
 | Windows: setup banner looks garbled (`â€"`, stray `Write-Host`) | An old copy of the scripts. Re-download the latest ZIP — the scripts now ship as UTF-8 with a BOM so PowerShell reads them correctly. |
 | OpenWebUI shows "Ollama not reachable" (local profile) | `ollama serve`, or just re-run the setup script |
 | Summary returns empty body | The model name in `.env` doesn't match a tag on Ollama. `ollama list` to check; pull the right tag or change `MODEL`. |
