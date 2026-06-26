@@ -43,7 +43,7 @@ The setup script handles everything else, including installing Ollama on local-p
 
 ## Setup
 
-1. [Download as a ZIP](https://github.com/pdfinn/tbl4-ai-stack/archive/refs/heads/main.zip) and unzip it.
+1. [Download as a ZIP](https://github.com/pdfinn/tbl4-ai-stack/archive/refs/heads/master.zip) and unzip it.
 2. Double-click the file for your operating system:
    - **macOS:** `setup_macos.command`
    - **Windows:** `setup_windows.bat`
