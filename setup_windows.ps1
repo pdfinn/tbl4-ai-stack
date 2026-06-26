@@ -298,6 +298,19 @@ $profileFlags = @()
 if ($useCloud) { $profileFlags += @("--profile", "cloud") }
 if ($useMcp)   { $profileFlags += @("--profile", "mcp")   }
 
+# Reap profile-gated containers left running from a prior profile. Switching
+# cloud->local would otherwise leave the previous run's ollama container up,
+# silently holding RAM (and worse, students would see it in 'docker ps' and
+# get confused about which Ollama is actually serving). Pass --profile cloud
+# --profile mcp so compose 'sees' the full service graph; `rm -fs` is a
+# no-op on services that aren't running, so this is safe on first install.
+$reap = @()
+if (-not $useCloud) { $reap += @("ollama", "ollama-init") }
+if (-not $useMcp)   { $reap += @("mcpo") }
+if ($reap.Count -gt 0) {
+    Invoke-NativeQuietExit { & docker compose --profile cloud --profile mcp rm -fs @reap } | Out-Null
+}
+
 Write-Host ""
 Write-Host "Pulling container images..."
 & docker compose @profileFlags pull --quiet

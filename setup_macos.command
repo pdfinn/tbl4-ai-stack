@@ -191,6 +191,19 @@ compose() {
     fi
 }
 
+# Reap profile-gated containers left running from a prior profile. Switching
+# cloud->local would otherwise leave the previous run's ollama container up,
+# silently holding RAM (and worse, students would see it in `docker ps` and
+# get confused about which Ollama is actually serving). Pass --profile cloud
+# --profile mcp so compose 'sees' the full service graph; `rm -fs` is a
+# no-op on services that aren't running, so this is safe on first install.
+REAP=()
+[ "$USE_CLOUD" = "0" ] && REAP+=(ollama ollama-init)
+[ "$USE_MCP"   = "0" ] && REAP+=(mcpo)
+if [ "${#REAP[@]}" -gt 0 ]; then
+    docker compose --profile cloud --profile mcp rm -fs "${REAP[@]}" >/dev/null 2>&1 || true
+fi
+
 echo
 echo "Pulling container images..."
 compose pull --quiet
