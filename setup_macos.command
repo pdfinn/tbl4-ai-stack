@@ -54,7 +54,7 @@ fi
 source .env
 
 PROFILES="${PROFILES:-local}"
-MODEL="${MODEL:-mistral}"
+MODEL="${MODEL:-llama3.2}"
 WEBUI_PORT="${WEBUI_PORT:-3000}"
 N8N_PORT="${N8N_PORT:-5678}"
 

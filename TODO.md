@@ -1,5 +1,38 @@
 # TODO
 
+## Default to quantised Ministral 3B for better tool calling
+
+**Status:** planned. The default model is `llama3.2` (3B) — the original
+[tbl4-local-llm](https://github.com/pdfinn/tbl4-local-llm) choice. We
+picked it here because it fits 8GB (~2–3 GB) and shares Llama 3.1's
+version-safe prompt template, so it can't hit the `yesterdayDate`
+breakage. Its weakness is tool calling, which OpenWebUI relies on to
+invoke the Summarise URL tool from chat. (The seeded n8n summarisation
+chain itself uses no tool calling, so the out-of-box demo is unaffected.)
+
+`ministral-3:3b` is a stronger tool-caller at a similar footprint
+(~2.8–3.2 GB) once tuned. The tuning levers are already proven in commit
+`99dfae1`:
+
+- workflow `options.numCtx: 2048` on the `lmChatOllama` node (the page
+  content is truncated to ~1500 tokens, so 2048 is plenty);
+- `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` — already set
+  on the cloud-profile `ollama` service in `docker-compose.yml`; for the
+  local profile they must be set on host Ollama (`launchctl setenv` +
+  restart on macOS) since they apply globally per Ollama instance.
+
+**Blocker:** `ministral-3:3b`'s prompt template calls `currentDate` /
+`yesterdayDate` helpers that Ollama < 0.13 doesn't define, breaking every
+chat. The setup scripts already auto-patch this (commit `2dd9fea`), but
+it's a moving part we don't want in the default path yet.
+
+**Switch condition:** once we can assume Ollama ≥ 0.13 on target machines
+(or the template auto-patch is proven across the fleet), flip the default
+`MODEL` to `ministral-3:3b` in `.env` / `.env.example` and the setup-script
+fallbacks, re-add `options.numCtx: 2048` to
+`templates/summarise-url.workflow.json`, and confirm host-Ollama flash-attn
+/ q8 env vars are documented for local-profile users.
+
 ## MCP-driven tool auto-discovery is blocked upstream
 
 **Status:** known-blocked. The `MCP Tools` workflow seeds and activates

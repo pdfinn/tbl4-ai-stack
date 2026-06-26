@@ -165,7 +165,7 @@ services:
       ollama:
         condition: service_started
     environment:
-      - MODEL=${MODEL:-mistral}
+      - MODEL=${MODEL:-llama3.2}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
