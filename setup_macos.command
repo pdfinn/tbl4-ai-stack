@@ -33,7 +33,16 @@ echo
 
 # ─── .env ──────────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
-    cp .env.example .env
+    # Use a plain content copy rather than `cp`. cp uses copyfile() to carry
+    # over extended attributes/ACLs/quarantine flags, which can fail with
+    # "Operation not permitted" (EPERM) on freshly-downloaded files. Reading
+    # bytes into a brand-new file sidesteps that entirely.
+    if ! cat .env.example > .env 2>/dev/null; then
+        rm -f .env
+        fail "Couldn't create .env in this folder. macOS may be blocking writes
+       here (common in Downloads/Desktop/Documents). Move the whole
+       'tbl4-ai-stack-master' folder into your home folder and run again."
+    fi
     info "Created .env from .env.example"
 fi
 
