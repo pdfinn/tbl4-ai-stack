@@ -24,63 +24,202 @@ Write-Host "========================================="
 Write-Host ""
 
 # --- .env --------------------------------------------------------------------
-if (-not (Test-Path .env)) {
-    Copy-Item .env.example .env
-    Info "Created .env from .env.example"
+# Anchor every path to the script's own folder. Relative paths break when the
+# shell's working directory isn't the repo (right-click "Run with PowerShell",
+# a shortcut with the wrong Start In, or a wrapper that skipped the cd), and
+# Resolve-Path treats [] in a folder name as a wildcard pattern.
+$RepoRoot       = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).ProviderPath }
+$EnvPath        = Join-Path $RepoRoot ".env"
+$EnvExamplePath = Join-Path $RepoRoot ".env.example"
+Set-Location -LiteralPath $RepoRoot
+
+# All .env I/O goes through the helpers below -- never Get-Content /
+# Set-Content / Add-Content, which are the whole reason this section exists.
+#
+# Windows PowerShell 5.1 decodes a BOM-less file as the ANSI codepage, while
+# [IO.File]::WriteAllText encodes UTF-8. The old Set-EnvVar mixed the two, so
+# each call re-encoded every non-ASCII byte into a longer sequence: the '---'
+# rules in .env.example's comments made the file grow ~2.2x per call, ~5x per
+# setup run. A student whose earlier steps failed and who re-ran setup half a
+# dozen times ended up with a .env of hundreds of megabytes, and the rewrite
+# died with OutOfMemoryException -- on what read like a trivial write of a 2 KB
+# file, on a machine with 32 GB free. Read and write UTF-8 explicitly, and
+# batch every edit into a single write.
+
+# Reading: strict UTF-8, falling back to ANSI once for a file left behind by an
+# older run (or hand-edited in a legacy editor). The write below then converts
+# it to UTF-8 for good, so the fallback is a one-time migration, not a cycle.
+function Read-EnvText([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        $bytes = $bytes[3..($bytes.Length - 1)]
+    }
+    try {
+        # throwOnInvalidBytes so we can detect ANSI rather than silently
+        # substituting U+FFFD all over the student's settings.
+        return (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
+    } catch {
+        return [System.Text.Encoding]::Default.GetString($bytes)
+    }
 }
 
-function Read-EnvFile {
-    $vars = @{}
-    Get-Content .env | ForEach-Object {
-        if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
-            $vars[$matches[1].Trim()] = $matches[2].Trim()
+function Write-EnvText([string]$Path, [string]$Text) {
+    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Pull KEY=VALUE pairs out of .env without materialising the file. A .env
+# bloated by the old encoding bug is a handful of enormous comment lines, so
+# even ReadLine() would allocate one whole and hit the same OutOfMemoryException
+# we are here to recover from. Fixed-size blocks with a line-length cap keep
+# this bounded at any file size.
+function Get-EnvSettings([string]$Path) {
+    $settings = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $settings }
+    $keyValue = '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*?)\r?$'
+    $reader = New-Object System.IO.StreamReader($Path, [System.Text.Encoding]::UTF8, $true)
+    try {
+        $buf = New-Object char[] 65536
+        $partial = ""
+        while (($n = $reader.Read($buf, 0, $buf.Length)) -gt 0) {
+            $pieces = ($partial + [string]::new($buf, 0, $n)) -split "`n"
+            $partial = $pieces[$pieces.Count - 1]
+            # Drop a runaway comment line instead of growing with it.
+            if ($partial.Length -gt 8192) { $partial = "" }
+            if ($pieces.Count -ge 2) {
+                foreach ($line in $pieces[0..($pieces.Count - 2)]) {
+                    if ($line.Length -le 4096 -and $line -match $keyValue) {
+                        $settings[$matches[1]] = $matches[2].Trim()
+                    }
+                }
+            }
+        }
+        if ($partial.Length -le 4096 -and $partial -match $keyValue) {
+            $settings[$matches[1]] = $matches[2].Trim()
+        }
+    } finally { $reader.Dispose() }
+    return $settings
+}
+
+# Apply every pending change in one read + one write. Values are assigned as
+# plain strings, not via -replace: a value containing '$1' or '$&' would
+# otherwise be expanded as a regex backreference and silently corrupt the file.
+function Set-EnvVars([hashtable]$Updates) {
+    if ($Updates.Count -eq 0) { return }
+    $lines = @((Read-EnvText $EnvPath) -split "\r?\n")
+    $seen  = @{}
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') {
+            $key = $matches[1]
+            if ($Updates.ContainsKey($key)) {
+                $lines[$i] = "$key=$($Updates[$key])"
+                $seen[$key] = $true
+            }
         }
     }
-    return $vars
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $lines) { $out.Add($line) }
+    foreach ($key in ($Updates.Keys | Sort-Object)) {
+        if (-not $seen.ContainsKey($key)) { $out.Add("$key=$($Updates[$key])") }
+    }
+    Write-EnvText $EnvPath ((($out -join "`n").TrimEnd("`n")) + "`n")
 }
 
-function Set-EnvVar($name, $value) {
-    $envContent = Get-Content .env
-    if ($envContent -match "^${name}=") {
-        $envContent = $envContent -replace "^${name}=.*", "${name}=$value"
-        [System.IO.File]::WriteAllText((Resolve-Path .env), (($envContent -join "`n") + "`n"))
+# Heal a .env already wrecked by the pre-fix encoding bug: keep every real
+# setting, rebuild the comments from .env.example. Without this, students who
+# ran the broken script stay broken no matter how correct the code above is.
+function Repair-EnvFile {
+    if (-not (Test-Path -LiteralPath $EnvPath)) { return }
+    $size = (Get-Item -LiteralPath $EnvPath -Force).Length
+    # A sane .env is ~2 KB; 64 KB is generous headroom for a student's edits.
+    $bloated = $size -gt 65536
+    $garbled = $false
+    if (-not $bloated) {
+        # UTF-8 read back as CP1252 always yields a high-Latin lead byte
+        # (C2/C3/E2) followed by another non-ASCII char. Written as escapes so
+        # this script stays pure ASCII and cannot be broken by its own encoding.
+        $garbled = (Read-EnvText $EnvPath) -match '[\u00C2\u00C3\u00E2][\u0080-\uFFFF]'
+    }
+    if (-not ($bloated -or $garbled)) { return }
+
+    $shown = if ($size -gt 1MB) { "{0:N1} MB" -f ($size / 1MB) } else { "$size bytes" }
+    Warn "Your .env was damaged by an earlier version of this setup script"
+    Warn "(size: $shown). Rebuilding it and keeping your settings..."
+
+    $keep = Get-EnvSettings $EnvPath
+    $backup = "$EnvPath.bak"
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $EnvPath -Destination $backup -Force
+    Copy-Item -LiteralPath $EnvExamplePath -Destination $EnvPath -Force
+    Set-EnvVars $keep
+    if ($size -gt 1MB) {
+        # Nothing salvageable left in it and it would sit there eating disk.
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        Info "Rebuilt .env from .env.example (kept $($keep.Count) settings)"
     } else {
-        Add-Content .env "${name}=$value"
+        Info "Rebuilt .env from .env.example (kept $($keep.Count) settings; old copy: .env.bak)"
     }
 }
 
-$envVars = Read-EnvFile
+try {
+    if (-not (Test-Path -LiteralPath $EnvExamplePath)) {
+        Fail @"
+.env.example is missing from this folder:
+  $RepoRoot
+The ZIP was probably extracted into a nested folder, or only part of it was
+extracted. Open the folder that actually contains docker-compose.yml and
+.env.example, and run setup_windows.bat from there.
+"@
+    }
+    if (-not (Test-Path -LiteralPath $EnvPath)) {
+        Copy-Item -LiteralPath $EnvExamplePath -Destination $EnvPath -Force
+        Info "Created .env from .env.example"
+    }
+    Repair-EnvFile
 
-# Generate a WEBUI_SECRET_KEY on first run.
-if (-not $envVars.ContainsKey("WEBUI_SECRET_KEY") -or [string]::IsNullOrEmpty($envVars["WEBUI_SECRET_KEY"])) {
-    $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    $secret = ([BitConverter]::ToString($bytes) -replace '-', '').ToLower()
-    Set-EnvVar "WEBUI_SECRET_KEY" $secret
-    Info "Generated WEBUI_SECRET_KEY"
-    $envVars = Read-EnvFile
+    $envVars    = Get-EnvSettings $EnvPath
+    $envUpdates = @{}
+
+    # Generate a WEBUI_SECRET_KEY on first run.
+    if (-not $envVars.ContainsKey("WEBUI_SECRET_KEY") -or [string]::IsNullOrEmpty($envVars["WEBUI_SECRET_KEY"])) {
+        $bytes = New-Object byte[] 32
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $envUpdates["WEBUI_SECRET_KEY"] = ([BitConverter]::ToString($bytes) -replace '-', '').ToLower()
+        Info "Generated WEBUI_SECRET_KEY"
+    }
+
+    $Profiles  = if ($envVars["PROFILES"])   { $envVars["PROFILES"]   } else { "local"   }
+    $Model     = if ($envVars["MODEL"])      { $envVars["MODEL"]      } else { "llama3.2" }
+    $WebuiPort = if ($envVars["WEBUI_PORT"]) { $envVars["WEBUI_PORT"] } else { "3000"    }
+    $N8nPort   = if ($envVars["N8N_PORT"])   { $envVars["N8N_PORT"]   } else { "5678"    }
+
+    $profilesLc = ",$($Profiles.ToLower()),"
+    $useCloud = $profilesLc.Contains(",cloud,")
+    $useMcp   = $profilesLc.Contains(",mcp,")
+    $useLocal = $profilesLc.Contains(",local,") -or (-not $useCloud)
+
+    Info "Profiles: $Profiles"
+
+    # Set Ollama URL according to profile.
+    if ($useCloud) {
+        $ollamaUrl = "http://ollama:11434"
+    } else {
+        $ollamaUrl = "http://host.docker.internal:11434"
+    }
+    $envUpdates["OLLAMA_BASE_URL"] = $ollamaUrl
+    $envUpdates["OLLAMA_HOST"]     = $ollamaUrl
+
+    Set-EnvVars $envUpdates
+} catch {
+    Fail @"
+Could not prepare the .env configuration file.
+  $($_.Exception.Message)
+
+To recover: delete .env from this folder and run setup again -- it will be
+recreated from .env.example.
+  Folder: $RepoRoot
+"@
 }
-
-$Profiles  = if ($envVars["PROFILES"])   { $envVars["PROFILES"]   } else { "local"   }
-$Model     = if ($envVars["MODEL"])      { $envVars["MODEL"]      } else { "llama3.2" }
-$WebuiPort = if ($envVars["WEBUI_PORT"]) { $envVars["WEBUI_PORT"] } else { "3000"    }
-$N8nPort   = if ($envVars["N8N_PORT"])   { $envVars["N8N_PORT"]   } else { "5678"    }
-
-$profilesLc = ",$($Profiles.ToLower()),"
-$useCloud = $profilesLc.Contains(",cloud,")
-$useMcp   = $profilesLc.Contains(",mcp,")
-$useLocal = $profilesLc.Contains(",local,") -or (-not $useCloud)
-
-Info "Profiles: $Profiles"
-
-# Set Ollama URL according to profile.
-if ($useCloud) {
-    $ollamaUrl = "http://ollama:11434"
-} else {
-    $ollamaUrl = "http://host.docker.internal:11434"
-}
-Set-EnvVar "OLLAMA_BASE_URL" $ollamaUrl
-Set-EnvVar "OLLAMA_HOST"     $ollamaUrl
 
 # --- Docker ------------------------------------------------------------------
 try { $null = Get-Command docker -ErrorAction Stop }

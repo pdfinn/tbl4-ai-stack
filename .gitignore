@@ -1,4 +1,5 @@
 .env
+.env.bak
 .claude/
 .tbl4-installed-ollama
 ollama_data/
