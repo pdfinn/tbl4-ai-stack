@@ -518,6 +518,38 @@ Close this window, open a new one, and run setup_windows.bat again.
 }
 
 # --- Compose -----------------------------------------------------------------
+
+# Identify whatever is holding a TCP port. Docker first (it knows which
+# container publishes what), then the OS. Process names belonging to Docker
+# Desktop's own port relay are reported as 'relay' rather than as something
+# the student could usefully close.
+$DockerRelayProcesses = @("wslrelay", "com.docker.backend", "com.docker.proxy", "vpnkit", "docker")
+
+function Get-PortHolder([string]$Port) {
+    $ps = Invoke-NativeCapture { & docker ps --filter "publish=$Port" --format "{{.Names}}" }
+    if ($ps.ExitCode -eq 0 -and $ps.Output) {
+        $name = ($ps.Output -split "`n" | Where-Object { $_ } | Select-Object -First 1)
+        if ($name) {
+            $name = $name.Trim()
+            $proj = (Invoke-NativeCapture {
+                & docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' $name
+            }).Output
+            if ($proj -eq "<no value>") { $proj = "" }
+            return [pscustomobject]@{ Kind = "container"; Name = $name; Project = $proj.Trim(); ProcessId = $null }
+        }
+    }
+    if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        if ($conn) {
+            $procName = (Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue).ProcessName
+            $kind = if ($procName -and ($DockerRelayProcesses -contains $procName)) { "relay" } else { "process" }
+            return [pscustomobject]@{ Kind = $kind; Name = $procName; Project = ""; ProcessId = $conn.OwningProcess }
+        }
+    }
+    return $null
+}
+
 $profileFlags = @()
 if ($useCloud) { $profileFlags += @("--profile", "cloud") }
 if ($useMcp)   { $profileFlags += @("--profile", "mcp")   }
@@ -551,16 +583,28 @@ Write-Host "Starting the stack..."
 if ($LASTEXITCODE -ne 0) {
     # Overwhelmingly the cause is a port already in use, so name the culprit
     # instead of leaving the student to decode compose's error.
-    $busy = @()
-    if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
-        foreach ($port in @($WebuiPort, $N8nPort)) {
-            $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-                    Select-Object -First 1
-            if ($conn) {
-                $owner = (Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue).ProcessName
-                $who = if ($owner) { "'$owner' (PID $($conn.OwningProcess))" } else { "PID $($conn.OwningProcess)" }
-                $busy += "  port $port is already in use by $who"
-            }
+    #
+    # Ask Docker before asking Windows. Docker Desktop proxies every published
+    # port through its own relay, so the OS reports the owner as 'wslrelay' or
+    # 'com.docker.backend' -- which is not something a student can close, and
+    # telling them to try is worse than saying nothing. The real holder is
+    # usually another container, very often a second copy of this same stack
+    # left running from an extracted ZIP in a different folder.
+    $busy  = @()
+    $steps = @()
+    foreach ($port in @($WebuiPort, $N8nPort)) {
+        $holder = Get-PortHolder $port
+        if (-not $holder) { continue }
+        if ($holder.Kind -eq "container") {
+            $from = if ($holder.Project) { " (compose project '$($holder.Project)')" } else { "" }
+            $busy  += "  port $port is published by the container '$($holder.Name)'$from"
+            $steps += "  docker stop $($holder.Name)"
+        } elseif ($holder.Kind -eq "relay") {
+            $busy  += "  port $port is held by Docker's port relay, so another container has it"
+            $steps += "  docker ps --filter publish=$port"
+        } else {
+            $busy  += "  port $port is already in use by '$($holder.Name)' (PID $($holder.ProcessId))"
+            $steps += "  close '$($holder.Name)', or change the port in .env"
         }
     }
     if ($busy.Count -gt 0) {
@@ -569,14 +613,59 @@ The stack did not start (docker compose up exited $LASTEXITCODE).
 
 $($busy -join "`n")
 
-Either close that program, or change WEBUI_PORT / N8N_PORT in .env and
-re-run this setup.
+To fix it, either free the port:
+$(($steps | Select-Object -Unique) -join "`n")
+
+or change WEBUI_PORT / N8N_PORT in .env and re-run this setup.
 "@
     }
     Fail @"
 The stack did not start (docker compose up exited $LASTEXITCODE).
 Read the error above, then re-run this setup. To see the full detail:
   docker compose logs
+"@
+}
+
+# 'compose up' exiting 0 does not mean the stack is usable. If an earlier run
+# failed partway -- a port clash, say -- the containers already exist with no
+# network and no port bindings, and starting those "succeeds". Observed for
+# real: n8n and open-webui came up healthy, attached to no network, publishing
+# nothing, so stack-init sat for 20 minutes unable to resolve its peers, while
+# localhost:3000 happily served a *different* copy of this stack that did hold
+# the port. Verify the ports are actually bound before trusting the run.
+$expectedPorts = @(
+    @{ Service = "open-webui"; ContainerPort = 8080; HostPort = $WebuiPort }
+    @{ Service = "n8n";        ContainerPort = 5678; HostPort = $N8nPort   }
+)
+$unbound = @()
+foreach ($expected in $expectedPorts) {
+    $bound = Invoke-NativeCapture { & docker compose port $expected.Service $expected.ContainerPort }
+    if ($bound.ExitCode -ne 0 -or $bound.Output -notmatch ":$($expected.HostPort)\s*$") {
+        $unbound += $expected
+    }
+}
+if ($unbound.Count -gt 0) {
+    $lines = @()
+    foreach ($expected in $unbound) {
+        $holder = Get-PortHolder $expected.HostPort
+        if ($holder -and $holder.Kind -eq "container") {
+            $from = if ($holder.Project) { " (compose project '$($holder.Project)')" } else { "" }
+            $lines += "  $($expected.Service): port $($expected.HostPort) is not bound - '$($holder.Name)'$from has it"
+        } else {
+            $lines += "  $($expected.Service): port $($expected.HostPort) is not bound"
+        }
+    }
+    Fail @"
+The containers started, but the stack is not reachable on its ports:
+
+$($lines -join "`n")
+
+This happens when an earlier run failed partway and left containers behind, or
+when another copy of this stack already holds these ports. Clear this project's
+containers:
+  docker compose down
+
+Then free the port (or change WEBUI_PORT / N8N_PORT in .env) and re-run setup.
 "@
 }
 

@@ -166,6 +166,18 @@ Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.log') -Value "$Tool $li
 
 if ($Tool -eq 'docker') {
     if ($line -eq 'info') { exit 0 }
+    # Which container publishes a port, and which compose project owns it.
+    if ($line -match '^ps --filter publish=') {
+        if ($cfg.portHolder) { Write-Output $cfg.portHolder }
+        exit 0
+    }
+    if ($line -match 'inspect .*compose.*project') { Write-Output ([string]$cfg.portHolderProject); exit 0 }
+    # Host-port binding check. The sandbox .env keeps the defaults.
+    if ($line -match '^compose port (\S+) (\d+)') {
+        if (-not $cfg.portsBound) { exit 1 }
+        Write-Output ("0.0.0.0:" + $(if ($matches[1] -eq 'open-webui') { '3000' } else { '5678' }))
+        exit 0
+    }
     if ($line -match 'compose .*\bps -aq (\S+)') {
         if (-not $cfg.containerAppears) { exit 0 }
         Write-Output ("cid-" + $matches[1]); exit 0
@@ -208,7 +220,8 @@ function New-StubSandbox {
     [System.IO.File]::WriteAllText((Join-Path $dir ".env"), $envText, (New-Object System.Text.UTF8Encoding($false)))
 
     $cfg = @{ wingetExit = 0; wingetInstalls = $true; pullExit = 0; upExit = 0
-              initExitCode = "0"; containerAppears = $true }
+              initExitCode = "0"; containerAppears = $true
+              portHolder = ""; portHolderProject = ""; portsBound = $true }
     foreach ($k in $Config.Keys) { $cfg[$k] = $Config[$k] }
     [System.IO.File]::WriteAllText((Join-Path $bin "stub.json"), ($cfg | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     [System.IO.File]::WriteAllText((Join-Path $bin "stub.ps1"), $StubDispatcher, (New-Object System.Text.UTF8Encoding($true)))
@@ -540,6 +553,43 @@ function Test-ComposeUpFailure {
     Assert-Equal "exits 1" 1 $r.ExitCode
 }
 
+function Test-PortConflictNamesTheContainer {
+    Head "A port conflict names the container, not Docker's port relay"
+    # Found on the first real run: Docker Desktop proxies published ports, so
+    # Windows reports the owner as 'wslrelay' and the old message told the
+    # student to close it. The actual holder was a second copy of this stack
+    # running from an extracted ZIP in another folder.
+    $dir = New-StubSandbox "port-clash" -Config @{
+        upExit = 1; portHolder = "other-stack-open-webui-1"; portHolderProject = "other-stack"
+    }
+    $r = Invoke-StubSetup $dir
+    Assert-True  "names the container holding the port" ($r.Output -match "other-stack-open-webui-1") $r.Output
+    Assert-True  "names the compose project it belongs to" ($r.Output -match "compose project 'other-stack'") $r.Output
+    Assert-True  "gives a runnable docker stop command" ($r.Output -match "docker stop other-stack-open-webui-1") $r.Output
+    Assert-True  "does not tell the student to close a Docker relay process" `
+        (-not ($r.Output -match "close 'wslrelay'|close 'com\.docker")) $r.Output
+    Assert-True  "still offers the port-change alternative" ($r.Output -match "WEBUI_PORT / N8N_PORT") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-UnboundPortsAreDetected {
+    Head "REGRESSION: containers that start without publishing their ports fail setup"
+    # Seen on a real run: after a port clash left containers behind, the next
+    # 'compose up -d' started them and exited 0 with no network and no port
+    # bindings. Setup then waited 20 minutes on a bootstrap container that
+    # could not resolve its peers, while localhost:3000 served another stack.
+    $dir = New-StubSandbox "unbound-ports" -Config @{
+        portsBound = $false; portHolder = "other-stack-open-webui-1"; portHolderProject = "other-stack"
+    }
+    $r = Invoke-StubSetup $dir
+    Assert-True  "does NOT claim setup completed" (-not ($r.Output -match "Setup complete")) $r.Output
+    Assert-True  "says the stack is not reachable on its ports" ($r.Output -match "not reachable on its ports") $r.Output
+    Assert-True  "names what holds the port" ($r.Output -match "other-stack-open-webui-1") $r.Output
+    Assert-True  "tells the student to clear this project first" ($r.Output -match "docker compose down") $r.Output
+    Assert-True  "fails before the 20-minute bootstrap wait" (-not ($r.Output -match "Bootstrapping")) $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
 function Test-BootstrapFailureIsDetected {
     Head "REGRESSION: a bootstrap container that exits non-zero is a failure"
     # The old loop broke out of the wait as soon as the container reached
@@ -601,6 +651,8 @@ $Tests = @(
     "Test-MissingWingetIsReported"
     "Test-ComposePullFailure"
     "Test-ComposeUpFailure"
+    "Test-PortConflictNamesTheContainer"
+    "Test-UnboundPortsAreDetected"
     "Test-BootstrapFailureIsDetected"
     "Test-BootstrapNeverStartsFailsFast"
     "Test-HappyPathCompletes"
