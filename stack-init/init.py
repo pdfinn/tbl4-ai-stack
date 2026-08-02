@@ -39,6 +39,38 @@ def request(url, method="GET", data=None, headers=None, cookies=None):
         return e.code, e.read().decode(), dict(e.headers)
 
 
+def request_json(url, method="GET", data=None, headers=None, cookies=None,
+                 what=None, attempts=5, delay=2):
+    """request(), but returning the parsed JSON body as well.
+
+    A service can answer 200 with an empty or partial body for a short window
+    while it is still coming up. Observed on a genuinely fresh install: n8n's
+    /rest/settings readiness probe goes green before /rest/workflows reliably
+    returns content, so the very next call got HTTP 200 with a zero-length
+    body. json.loads() then blew up with a traceback and bootstrapping died
+    half-done -- the containers were left running and the stack silently
+    misconfigured.
+
+    Treat an unparseable 200 as "not ready yet" and retry, then give up with a
+    readable message instead of a stack trace.
+    """
+    body = ""
+    for attempt in range(attempts):
+        code, body, hdrs = request(url, method, data, headers=headers, cookies=cookies)
+        if code != 200:
+            return code, None, body, hdrs
+        try:
+            return code, json.loads(body), body, hdrs
+        except ValueError:
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    sys.exit(
+        f"{what or url}: HTTP 200 but the body was not JSON after {attempts} attempts "
+        f"({len(body)} bytes received). The service may still be starting up — "
+        f"re-run setup."
+    )
+
+
 def wait_for(url, timeout=600):
     print(f"waiting for {url}", flush=True)
     deadline = time.time() + timeout
@@ -92,10 +124,11 @@ def setup_n8n():
     else:
         sys.exit(f"n8n owner setup failed: HTTP {code} {body[:200]}")
 
-    code, body, _ = request(f"{N8N_URL}/rest/workflows", cookies=cookies)
+    code, parsed, body, _ = request_json(f"{N8N_URL}/rest/workflows", cookies=cookies,
+                                         what="n8n list workflows")
     if code != 200:
         sys.exit(f"n8n list workflows failed: HTTP {code}")
-    workflows = json.loads(body).get("data", [])
+    workflows = parsed.get("data", [])
     if not workflows:
         print("  n8n: no workflows to activate", flush=True)
         return
@@ -103,10 +136,12 @@ def setup_n8n():
         if w.get("active"):
             print(f"  n8n: {w['name']!r} already active", flush=True)
             continue
-        code, body, _ = request(f"{N8N_URL}/rest/workflows/{w['id']}", cookies=cookies)
+        code, parsed, body, _ = request_json(f"{N8N_URL}/rest/workflows/{w['id']}",
+                                             cookies=cookies,
+                                             what=f"n8n get workflow {w['id']!r}")
         if code != 200:
             sys.exit(f"n8n get workflow {w['id']!r} failed: HTTP {code}")
-        version_id = json.loads(body)["data"]["versionId"]
+        version_id = parsed["data"]["versionId"]
         code, body, _ = request(
             f"{N8N_URL}/rest/workflows/{w['id']}/activate",
             "POST", {"versionId": version_id}, cookies=cookies,
@@ -118,32 +153,32 @@ def setup_n8n():
 
 def owui_token():
     """Return an admin bearer token — sign up if first run, sign in otherwise."""
-    code, body, _ = request(f"{OWUI_URL}/api/config")
+    code, cfg, body, _ = request_json(f"{OWUI_URL}/api/config",
+                                      what="OpenWebUI config probe")
     if code != 200:
         sys.exit(f"OpenWebUI config probe failed: HTTP {code}")
     # OpenWebUI v0.9.1's /api/config doesn't expose an `onboarding` field;
     # `features.enable_signup` is the canonical "is the admin slot still
     # open?" signal -- true on a virgin install, flipped to false the
     # moment a user is created.
-    cfg = json.loads(body)
     if cfg.get("features", {}).get("enable_signup", True):
-        code, body, _ = request(f"{OWUI_URL}/api/v1/auths/signup", "POST", {
+        code, parsed, body, _ = request_json(f"{OWUI_URL}/api/v1/auths/signup", "POST", {
             "name": "Student",
             "email": OWNER_EMAIL,
             "password": OWNER_PASSWORD,
-        })
+        }, what="OpenWebUI signup")
         if code != 200:
             sys.exit(f"OpenWebUI signup failed: HTTP {code} {body[:200]}")
         print("  owui: admin created", flush=True)
     else:
-        code, body, _ = request(f"{OWUI_URL}/api/v1/auths/signin", "POST", {
+        code, parsed, body, _ = request_json(f"{OWUI_URL}/api/v1/auths/signin", "POST", {
             "email": OWNER_EMAIL,
             "password": OWNER_PASSWORD,
-        })
+        }, what="OpenWebUI signin")
         if code != 200:
             sys.exit(f"OpenWebUI signin failed: HTTP {code} {body[:200]}")
         print("  owui: signed in (already onboarded)", flush=True)
-    return json.loads(body)["token"]
+    return parsed["token"]
 
 
 def setup_owui():
