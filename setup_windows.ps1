@@ -247,6 +247,32 @@ function Invoke-NativeQuietExit([scriptblock]$Script) {
 
 function Test-DockerUp { return (Invoke-NativeQuietExit { & docker info }) -eq 0 }
 
+# Capture a native command's stdout and exit code with stderr discarded.
+# Same EAP trap as above: '2>$null' counts as redirecting, so under
+# $ErrorActionPreference='Stop' a single stderr line (compose's "found orphan
+# containers" warning, say) becomes a terminating NativeCommandError.
+function Invoke-NativeCapture([scriptblock]$Script) {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        $out = & $Script 2>$null
+        return [pscustomobject]@{ Output = (($out | Out-String).Trim()); ExitCode = $LASTEXITCODE }
+    } catch {
+        return [pscustomobject]@{ Output = ""; ExitCode = 1 }
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
+# IMPORTANT, and the reason several checks below look verbose: an *uncaptured*
+# native command never raises a terminating error, not even on a stderr write
+# and not even under $ErrorActionPreference='Stop'. So
+#     try { winget install ... } catch { Fail "..." }
+# can never fire -- the catch is dead code, and the script sails on to announce
+# success. Every native call must have its $LASTEXITCODE checked explicitly,
+# and every "[OK]" must be earned by verifying the end state rather than by
+# reaching a particular line.
+
 # Diagnose the usual Windows blockers (virtualization off in firmware,
 # WSL2 missing or stale) and self-heal what is safe to. Returns nothing;
 # prints guidance. Never reboots or changes BIOS - it can't.
@@ -326,23 +352,82 @@ if (-not (Test-DockerUp)) {
 Info "Docker is running"
 
 # --- Host Ollama (local profile only) ----------------------------------------
-if ($useLocal -and -not $useCloud) {
-    $ollamaInstalled = $false
-    try { $null = Get-Command ollama -ErrorAction Stop; $ollamaInstalled = $true } catch {}
 
-    if (-not $ollamaInstalled) {
+# Find ollama.exe: PATH first, then the directory winget installs it into.
+# The second check matters because winget updates the *registry* PATH, which
+# this already-running process does not see -- that gap is what surfaces later
+# as "'ollama' is not recognized" long after setup claimed it was installed.
+function Get-OllamaPath([string]$InstallDir) {
+    $cmd = Get-Command ollama -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $exe = Join-Path $InstallDir "ollama.exe"
+    if (Test-Path -LiteralPath $exe) { return $exe }
+    return $null
+}
+
+if ($useLocal -and -not $useCloud) {
+    $ollamaDir = Join-Path $env:LOCALAPPDATA "Programs\Ollama"
+
+    if (-not (Get-OllamaPath $ollamaDir)) {
         Write-Host ""
         Warn "Installing Ollama..."
-        try {
-            winget install --id Ollama.Ollama --accept-source-agreements --accept-package-agreements
-        } catch {
-            Fail "Could not install Ollama. Install manually from:`nhttps://ollama.com/download/windows"
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Fail @"
+Ollama is not installed, and winget is not available on this machine.
+Install Ollama manually, then re-run this setup:
+  https://ollama.com/download/windows
+"@
         }
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        winget install --id Ollama.Ollama --accept-source-agreements --accept-package-agreements
+        $wingetExit = $LASTEXITCODE
+
+        # Pick up the PATH winget just wrote. Append rather than replace: the
+        # old code overwrote $env:PATH with Machine+User and silently dropped
+        # anything this process had that the registry does not.
+        $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+        $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        $env:PATH = (@($env:PATH, $machinePath, $userPath) | Where-Object { $_ }) -join ";"
+
+        # Verify the install instead of assuming it. winget exits non-zero on a
+        # corrupt source cache without throwing, which is how a failed install
+        # used to be reported as "[OK] Ollama is installed".
+        if (-not (Get-OllamaPath $ollamaDir)) {
+            Fail @"
+Ollama was not installed (winget exit code $wingetExit).
+It is not on PATH, and nothing was installed to:
+  $ollamaDir
+
+If winget reported a source or cache error above, repair it with:
+  winget source reset --force
+Otherwise install Ollama manually and re-run this setup:
+  https://ollama.com/download/windows
+"@
+        }
+        if ($wingetExit -ne 0) {
+            # Ollama is there despite the non-zero exit (winget reports one for
+            # benign cases too, such as "no applicable upgrade"). Worth saying
+            # out loud so a later oddity is traceable, but not worth stopping.
+            Warn "winget exited $wingetExit, but Ollama is present - continuing."
+        }
         # Marker so teardown knows *this script* installed Ollama. Without it,
         # teardown will not touch a host Ollama the user installed separately.
-        Set-Content -Path .tbl4-installed-ollama -Value "Ollama.Ollama"
+        # Written only after the install is confirmed, so teardown never offers
+        # to uninstall something setup failed to install.
+        Set-Content -LiteralPath (Join-Path $RepoRoot ".tbl4-installed-ollama") -Value "Ollama.Ollama" -Encoding ASCII
         Write-Host ""
+    }
+
+    # Ollama exists, but this shell may still not be able to invoke it.
+    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+        $env:PATH = "$env:PATH;$ollamaDir"
+    }
+    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+        Fail @"
+Ollama is installed but cannot be run from this window.
+Expected to find ollama.exe in:
+  $ollamaDir
+Close this window, open a new one, and run setup_windows.bat again.
+"@
     }
     Info "Ollama is installed"
 
@@ -453,8 +538,47 @@ if ($reap.Count -gt 0) {
 Write-Host ""
 Write-Host "Pulling container images..."
 & docker compose @profileFlags pull --quiet
+if ($LASTEXITCODE -ne 0) {
+    Fail @"
+Could not download the container images (docker compose pull exited $LASTEXITCODE).
+This is almost always a network or Docker Hub problem. Check the error above,
+confirm you are online, and re-run this setup.
+"@
+}
+
 Write-Host "Starting the stack..."
 & docker compose @profileFlags up -d
+if ($LASTEXITCODE -ne 0) {
+    # Overwhelmingly the cause is a port already in use, so name the culprit
+    # instead of leaving the student to decode compose's error.
+    $busy = @()
+    if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+        foreach ($port in @($WebuiPort, $N8nPort)) {
+            $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+            if ($conn) {
+                $owner = (Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue).ProcessName
+                $who = if ($owner) { "'$owner' (PID $($conn.OwningProcess))" } else { "PID $($conn.OwningProcess)" }
+                $busy += "  port $port is already in use by $who"
+            }
+        }
+    }
+    if ($busy.Count -gt 0) {
+        Fail @"
+The stack did not start (docker compose up exited $LASTEXITCODE).
+
+$($busy -join "`n")
+
+Either close that program, or change WEBUI_PORT / N8N_PORT in .env and
+re-run this setup.
+"@
+    }
+    Fail @"
+The stack did not start (docker compose up exited $LASTEXITCODE).
+Read the error above, then re-run this setup. To see the full detail:
+  docker compose logs
+"@
+}
 
 Write-Host ""
 Write-Host "Bootstrapping (one-time; takes ~60s on a warm install)..."
@@ -464,14 +588,47 @@ Write-Host "Bootstrapping (one-time; takes ~60s on a warm install)..."
 $initServices = @("stack-init")
 if ($useCloud) { $initServices += "ollama-init" }
 foreach ($svc in $initServices) {
+    $state    = $null
+    $exitCode = $null
     for ($i = 0; $i -lt 240; $i++) {
-        $cid = (& docker compose ps -aq $svc 2>$null) -split "`n" | Select-Object -First 1
+        $cid = ((Invoke-NativeCapture { & docker compose ps -aq $svc }).Output -split "`n" |
+                Select-Object -First 1).Trim()
         if ($cid) {
-            $state = (& docker inspect -f '{{.State.Status}}' $cid 2>$null)
-            if ($state -eq "exited") { break }
+            $state = (Invoke-NativeCapture { & docker inspect -f '{{.State.Status}}' $cid }).Output
+            if ($state -eq "exited") {
+                $exitCode = (Invoke-NativeCapture { & docker inspect -f '{{.State.ExitCode}}' $cid }).Output
+                break
+            }
+        } elseif ($i -ge 6) {
+            # 30 seconds in and compose still reports no container for this
+            # service: it is never going to appear. The old loop sat here for
+            # the full 20 minutes and then printed "Setup complete!".
+            Fail @"
+The '$svc' bootstrap container never started.
+See what compose thinks is running:
+  docker compose ps -a
+  docker compose logs $svc
+"@
         }
         Start-Sleep -Seconds 5
     }
+    if ($state -ne "exited") {
+        Fail @"
+The '$svc' bootstrap container did not finish within 20 minutes.
+Check its progress with:
+  docker compose logs $svc
+"@
+    }
+    # A container that exited is not a container that succeeded.
+    if ($exitCode -ne "0") {
+        Fail @"
+Bootstrapping failed: '$svc' exited with code $exitCode.
+The containers are running but the stack is not fully configured, so the
+web UIs will not behave correctly yet. See what went wrong with:
+  docker compose logs $svc
+"@
+    }
+    Info "$svc finished"
 }
 
 # --- Done --------------------------------------------------------------------

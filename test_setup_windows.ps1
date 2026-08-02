@@ -23,8 +23,9 @@ $SetupPath  = Join-Path $RepoRoot "setup_windows.ps1"
 $ExamplePath = Join-Path $RepoRoot ".env.example"
 $SandboxRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("tbl4-tests-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
 
-$script:Passed = 0
-$script:Failed = 0
+$script:Passed  = 0
+$script:Failed  = 0
+$script:Skipped = 0
 
 function Ok($msg)   { Write-Host "  [PASS] $msg" -ForegroundColor Green }
 function Bad($msg)  { Write-Host "  [FAIL] $msg" -ForegroundColor Red }
@@ -37,6 +38,31 @@ function Assert-True($name, $condition, $detail) {
 
 function Assert-Equal($name, $expected, $actual) {
     Assert-True $name ($expected -eq $actual) "expected [$expected], got [$actual]"
+}
+
+function Add-Skip($name, $why) {
+    $script:Skipped++
+    Write-Host "  [SKIP] $name" -ForegroundColor DarkYellow
+    Write-Host "         $why" -ForegroundColor DarkYellow
+}
+
+# After a failed install, setup re-reads the Machine and User PATH from the
+# registry -- correctly, since that is where winget writes it. On a machine
+# that already has Ollama installed, that lookup finds the real one, so the
+# "winget installed nothing" state cannot be staged here. Environment
+# variables cannot mask it; only a machine without Ollama can run these.
+function Test-RegistryPathHasOllama {
+    foreach ($scope in @("Machine", "User")) {
+        $raw = [System.Environment]::GetEnvironmentVariable("PATH", $scope)
+        if (-not $raw) { continue }
+        foreach ($entry in ($raw -split ';')) {
+            if (-not $entry) { continue }
+            try {
+                if (Test-Path -LiteralPath (Join-Path $entry "ollama.exe")) { return $true }
+            } catch { }
+        }
+    }
+    return $false
 }
 
 # --- Harness -----------------------------------------------------------------
@@ -123,6 +149,103 @@ function New-CorruptEnv {
     [void]$sb.Append("`n")
     foreach ($k in $Settings.Keys) { [void]$sb.Append("$k=$($Settings[$k])`n") }
     [System.IO.File]::WriteAllText($Path, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# --- Stub harness ------------------------------------------------------------
+# The tests above slice the script before the Docker section. The install-check
+# tests below need the whole thing, so they run it against stub docker/winget/
+# ollama executables on a controlled PATH, with a controlled LOCALAPPDATA.
+# Behaviour is driven by stub.json, so a test can say "winget exits 1" or
+# "stack-init exits 1" and assert what setup does about it.
+
+$StubDispatcher = @'
+param([string]$Tool)
+$line = (@($args) -join ' ')
+$cfg = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'stub.json') -Raw | ConvertFrom-Json
+Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.log') -Value "$Tool $line"
+
+if ($Tool -eq 'docker') {
+    if ($line -eq 'info') { exit 0 }
+    if ($line -match 'compose .*\bps -aq (\S+)') {
+        if (-not $cfg.containerAppears) { exit 0 }
+        Write-Output ("cid-" + $matches[1]); exit 0
+    }
+    if ($line -match 'inspect .*State\.Status')   { Write-Output 'exited'; exit 0 }
+    if ($line -match 'inspect .*State\.ExitCode') { Write-Output ([string]$cfg.initExitCode); exit 0 }
+    if ($line -match 'compose .*\bpull\b')        { exit $cfg.pullExit }
+    if ($line -match 'compose .*\bup\b')          { exit $cfg.upExit }
+    exit 0
+}
+if ($Tool -eq 'winget') {
+    if ($line -match '^install') {
+        # The critical case: winget can report failure *and* install nothing,
+        # or exit 0 having installed nothing. Both must be caught.
+        if ($cfg.wingetInstalls) {
+            $dir = Join-Path $env:LOCALAPPDATA 'Programs\Ollama'
+            $null = [System.IO.Directory]::CreateDirectory($dir)
+            Set-Content -LiteralPath (Join-Path $dir 'ollama.exe') -Value 'stub' -Encoding ASCII
+        }
+        Write-Output 'stub winget: install attempted'
+        exit $cfg.wingetExit
+    }
+    exit 0
+}
+exit 0
+'@
+
+function New-StubSandbox {
+    param([string]$Name, [hashtable]$Config = @{}, [string]$Profiles = "cloud", [switch]$NoWinget)
+
+    $dir = Join-Path $SandboxRoot $Name
+    $bin = Join-Path $dir "bin"
+    $null = [System.IO.Directory]::CreateDirectory($bin)
+    $null = [System.IO.Directory]::CreateDirectory((Join-Path $dir "localappdata"))
+
+    Copy-Item -LiteralPath $SetupPath   -Destination (Join-Path $dir "setup_windows.ps1") -Force
+    Copy-Item -LiteralPath $ExamplePath -Destination (Join-Path $dir ".env.example") -Force
+
+    $envText = [System.IO.File]::ReadAllText($ExamplePath) -replace '(?m)^PROFILES=.*', "PROFILES=$Profiles"
+    [System.IO.File]::WriteAllText((Join-Path $dir ".env"), $envText, (New-Object System.Text.UTF8Encoding($false)))
+
+    $cfg = @{ wingetExit = 0; wingetInstalls = $true; pullExit = 0; upExit = 0
+              initExitCode = "0"; containerAppears = $true }
+    foreach ($k in $Config.Keys) { $cfg[$k] = $Config[$k] }
+    [System.IO.File]::WriteAllText((Join-Path $bin "stub.json"), ($cfg | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText((Join-Path $bin "stub.ps1"), $StubDispatcher, (New-Object System.Text.UTF8Encoding($true)))
+
+    # No 'ollama' stub on purpose. Stubbing it would put ollama on PATH, so
+    # Get-OllamaPath would report it already installed and the winget path --
+    # the thing under test -- would never run. The cloud profile never invokes
+    # ollama, and the local-profile tests all fail before reaching it.
+    $tools = @("docker")
+    if (-not $NoWinget) { $tools += "winget" }
+    foreach ($tool in $tools) {
+        [System.IO.File]::WriteAllText((Join-Path $bin "$tool.cmd"),
+            "@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0stub.ps1`" $tool %*`r`n",
+            (New-Object System.Text.ASCIIEncoding))
+    }
+    return $dir
+}
+
+function Invoke-StubSetup([string]$Dir) {
+    $sys = Join-Path $env:SystemRoot "System32"
+    $savedPath  = $env:PATH
+    $savedLocal = $env:LOCALAPPDATA
+    $prevEAP    = $ErrorActionPreference
+    # A tightly controlled PATH: the stubs plus just enough Windows to run
+    # PowerShell. Any real docker/winget/ollama on this machine is invisible.
+    $env:PATH = @((Join-Path $Dir "bin"), $sys, (Join-Path $sys "WindowsPowerShell\v1.0")) -join ";"
+    $env:LOCALAPPDATA = Join-Path $Dir "localappdata"
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dir "setup_windows.ps1") 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        $env:PATH = $savedPath
+        $env:LOCALAPPDATA = $savedLocal
+    }
+    return [pscustomobject]@{ Output = ($out | Out-String); ExitCode = $code }
 }
 
 # --- Tests -------------------------------------------------------------------
@@ -353,6 +476,105 @@ function Test-MissingExample {
     Assert-True  "no raw .NET exception text" (-not ($r.Output -match "Exception|at System\.")) $r.Output
 }
 
+function Test-WingetFailureIsDetected {
+    Head "REGRESSION: a failed winget install is not reported as success"
+    # The exact classroom failure: winget's source cache is broken, it exits
+    # non-zero without throwing, and the old script announced
+    # "[OK] Ollama is installed" and carried on.
+    if (Test-RegistryPathHasOllama) {
+        Add-Skip "a failed winget install is not reported as success" `
+                 "this machine has Ollama on its registry PATH; run on a machine without it for real coverage"
+        return
+    }
+    $dir = New-StubSandbox "winget-fail" -Profiles "local" -Config @{ wingetExit = 1; wingetInstalls = $false }
+    $r = Invoke-StubSetup $dir
+
+    Assert-True  "does NOT claim Ollama is installed" (-not ($r.Output -match "Ollama is installed")) $r.Output
+    Assert-True  "reports the winget exit code" ($r.Output -match "winget exit code 1") $r.Output
+    Assert-True  "suggests repairing the winget source" ($r.Output -match "winget source reset") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+    Assert-True  "does not write the teardown marker" `
+        (-not (Test-Path -LiteralPath (Join-Path $dir ".tbl4-installed-ollama"))) `
+        "marker written for an install that never happened"
+}
+
+function Test-WingetSilentNoOpIsDetected {
+    Head "REGRESSION: winget exiting 0 without installing is caught"
+    if (Test-RegistryPathHasOllama) {
+        Add-Skip "winget exiting 0 without installing is caught" `
+                 "this machine has Ollama on its registry PATH; run on a machine without it for real coverage"
+        return
+    }
+    $dir = New-StubSandbox "winget-noop" -Profiles "local" -Config @{ wingetExit = 0; wingetInstalls = $false }
+    $r = Invoke-StubSetup $dir
+    Assert-True  "does NOT claim Ollama is installed" (-not ($r.Output -match "Ollama is installed")) $r.Output
+    Assert-True  "says Ollama was not installed" ($r.Output -match "Ollama was not installed") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-MissingWingetIsReported {
+    Head "Missing winget is reported before any install is attempted"
+    $dir = New-StubSandbox "no-winget" -Profiles "local" -NoWinget
+    $r = Invoke-StubSetup $dir
+    Assert-True  "names winget as unavailable" ($r.Output -match "winget is not available") $r.Output
+    Assert-True  "points at the manual download" ($r.Output -match "ollama\.com/download/windows") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-ComposePullFailure {
+    Head "REGRESSION: a failed image pull stops setup"
+    $dir = New-StubSandbox "pull-fail" -Config @{ pullExit = 1 }
+    $r = Invoke-StubSetup $dir
+    Assert-True  "does NOT claim setup completed" (-not ($r.Output -match "Setup complete")) $r.Output
+    Assert-True  "reports the pull failure" ($r.Output -match "Could not download the container images") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-ComposeUpFailure {
+    Head "REGRESSION: a failed 'compose up' stops setup"
+    $dir = New-StubSandbox "up-fail" -Config @{ upExit = 1 }
+    $r = Invoke-StubSetup $dir
+    Assert-True  "does NOT claim setup completed" (-not ($r.Output -match "Setup complete")) $r.Output
+    Assert-True  "reports that the stack did not start" ($r.Output -match "stack did not start") $r.Output
+    Assert-True  "mentions the port settings as the likely cause" ($r.Output -match "WEBUI_PORT|docker compose logs") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-BootstrapFailureIsDetected {
+    Head "REGRESSION: a bootstrap container that exits non-zero is a failure"
+    # The old loop broke out of the wait as soon as the container reached
+    # 'exited', without ever looking at the exit code, and printed
+    # "Setup complete!" over a half-configured stack.
+    $dir = New-StubSandbox "init-fail" -Config @{ initExitCode = "1" }
+    $r = Invoke-StubSetup $dir
+    Assert-True  "does NOT claim setup completed" (-not ($r.Output -match "Setup complete")) $r.Output
+    Assert-True  "names the failing service and its code" ($r.Output -match "exited with code 1") $r.Output
+    Assert-True  "tells the student how to see why" ($r.Output -match "docker compose logs") $r.Output
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-BootstrapNeverStartsFailsFast {
+    Head "REGRESSION: a container that never appears fails fast, not in 20 minutes"
+    $dir = New-StubSandbox "init-missing" -Config @{ containerAppears = $false }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-StubSetup $dir
+    $sw.Stop()
+    Assert-True  "reports the container never started" ($r.Output -match "never started") $r.Output
+    Assert-True  "gives up in well under 20 minutes" ($sw.Elapsed.TotalSeconds -lt 120) `
+        "took $([math]::Round($sw.Elapsed.TotalSeconds)) s"
+    Assert-Equal "exits 1" 1 $r.ExitCode
+}
+
+function Test-HappyPathCompletes {
+    Head "The happy path still reaches 'Setup complete!'"
+    # Guards against the checks above turning into false negatives.
+    $dir = New-StubSandbox "happy"
+    $r = Invoke-StubSetup $dir
+    Assert-True  "announces completion" ($r.Output -match "Setup complete") $r.Output
+    Assert-True  "confirms each bootstrap service finished" ($r.Output -match "stack-init finished") $r.Output
+    Assert-Equal "exits 0" 0 $r.ExitCode
+}
+
 # --- Run ---------------------------------------------------------------------
 Write-Host ""
 Write-Host "========================================="
@@ -374,6 +596,14 @@ $Tests = @(
     "Test-HandlesCrlf"
     "Test-WildcardPath"
     "Test-MissingExample"
+    "Test-WingetFailureIsDetected"
+    "Test-WingetSilentNoOpIsDetected"
+    "Test-MissingWingetIsReported"
+    "Test-ComposePullFailure"
+    "Test-ComposeUpFailure"
+    "Test-BootstrapFailureIsDetected"
+    "Test-BootstrapNeverStartsFailsFast"
+    "Test-HappyPathCompletes"
 )
 try {
     # Each test is isolated: a regression bad enough to throw should show up as
@@ -391,13 +621,14 @@ try {
 
 Write-Host ""
 Write-Host "========================================="
+$skipNote = if ($script:Skipped -gt 0) { " ($script:Skipped skipped - see [SKIP] above)" } else { "" }
 if ($script:Failed -eq 0) {
-    Write-Host "  All $script:Passed checks passed." -ForegroundColor Green
+    Write-Host "  All $script:Passed checks passed.$skipNote" -ForegroundColor Green
     Write-Host "========================================="
     Write-Host ""
     exit 0
 } else {
-    Write-Host "  $script:Failed failed, $script:Passed passed." -ForegroundColor Red
+    Write-Host "  $script:Failed failed, $script:Passed passed.$skipNote" -ForegroundColor Red
     Write-Host "========================================="
     Write-Host ""
     exit 1

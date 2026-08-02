@@ -52,17 +52,34 @@ foreach ($feature in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatf
 }
 
 # --- WSL2 --------------------------------------------------------------------
+# Native commands are called uncaptured and checked via $LASTEXITCODE. An
+# uncaptured native command never raises a terminating error, so a try/catch
+# around one cannot report its failure -- which is how a failed 'wsl --update'
+# used to still print "[OK] WSL updated".
 Step "WSL2 kernel"
 $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
 if (-not $wsl) {
     Warn "wsl.exe not found - installing WSL (this may require a reboot)..."
-    try { & wsl.exe --install --no-distribution 2>&1 | Write-Host } catch {}
+    & wsl.exe --install --no-distribution
+    if ($LASTEXITCODE -ne 0) {
+        Warn "wsl --install exited $LASTEXITCODE. If it did not complete, open an"
+        Warn "Administrator PowerShell and run 'wsl --install' by hand."
+    }
     $rebootNeeded = $true
 } else {
     Warn "Updating WSL kernel (wsl --update)..."
-    try { & wsl.exe --update 2>&1 | Write-Host } catch {}
-    try { & wsl.exe --set-default-version 2 2>&1 | Out-Null } catch {}
-    Info "WSL updated; default version set to 2"
+    & wsl.exe --update
+    $updateExit = $LASTEXITCODE
+    & wsl.exe --set-default-version 2 | Out-Null
+    $versionExit = $LASTEXITCODE
+    if ($updateExit -ne 0) {
+        Warn "wsl --update exited $updateExit - the kernel may be out of date."
+        Warn "If Docker Desktop will not start, run 'wsl --update' as Administrator."
+    } elseif ($versionExit -ne 0) {
+        Warn "wsl --set-default-version 2 exited $versionExit - WSL1 may still be the default."
+    } else {
+        Info "WSL updated; default version set to 2"
+    }
 }
 
 # --- Virtualization in firmware (report only) --------------------------------

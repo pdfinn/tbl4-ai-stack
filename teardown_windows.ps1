@@ -23,10 +23,20 @@ Write-Host "  Tarkas Brainlab IV - Stack Teardown"
 Write-Host "========================================="
 Write-Host ""
 
+# An uncaptured native command never raises a terminating error -- not even on
+# a stderr write, and not even under $ErrorActionPreference='Stop'. So a
+# try/catch around one is dead code, and the only honest signal is
+# $LASTEXITCODE. Every "[OK]" below is conditional on it.
+
 # --- Step 1: Stop containers (all profiles) ---------------------------------
 Write-Host "Stopping containers..."
 & docker compose --profile cloud --profile mcp down
-Info "Containers stopped"
+if ($LASTEXITCODE -ne 0) {
+    Warn "docker compose down exited $LASTEXITCODE - some containers may still be running."
+    Warn "Check with: docker compose ps -a"
+} else {
+    Info "Containers stopped"
+}
 
 # --- Step 2: Delete volumes --------------------------------------------------
 if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history, workflows, tools, custom settings)?") {
@@ -49,12 +59,19 @@ if (Confirm-Step "Delete tbl4-ai-stack state (volumes + local .env: chat history
 if (Test-Path .tbl4-installed-ollama) {
     if (Confirm-Step "Uninstall the Ollama that setup installed (and remove its models)?") {
         try { Stop-Process -Name "ollama*" -Force -ErrorAction SilentlyContinue } catch {}
-        try {
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Warn "winget is not available. Remove Ollama from Settings > Apps > Installed apps."
+        } else {
             winget uninstall --id Ollama.Ollama --accept-source-agreements
-            Remove-Item -Path .tbl4-installed-ollama -Force -ErrorAction SilentlyContinue
-            Info "Ollama uninstalled"
-        } catch {
-            Warn "Could not auto-uninstall Ollama. Remove it from Settings > Apps > Installed apps."
+            if ($LASTEXITCODE -eq 0) {
+                Remove-Item -Path .tbl4-installed-ollama -Force -ErrorAction SilentlyContinue
+                Info "Ollama uninstalled"
+            } else {
+                # Keep the marker: the uninstall did not happen, so a later
+                # teardown should still offer to retry it.
+                Warn "Could not uninstall Ollama (winget exit code $LASTEXITCODE)."
+                Warn "Remove it from Settings > Apps > Installed apps."
+            }
         }
     } else {
         Skip "Ollama uninstall"
